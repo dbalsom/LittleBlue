@@ -1,0 +1,87 @@
+name: Build Sample
+on: [push, pull_request]
+
+jobs:
+    build-win:
+        name: Build for Windows
+        runs-on: windows-latest
+        strategy:
+          fail-fast: false
+          matrix:
+              arch: [x64, ARM64]
+              target: [Windows]
+
+        steps:
+          - uses: actions/checkout@v4
+            with:
+                submodules: recursive
+          - name: Configure
+            run: cmake -DCMAKE_SYSTEM_NAME=${{ matrix.target }} -DCMAKE_SYSTEM_VERSION="10.0" -A${{ matrix.arch }} -S . -B build
+          - name: Build
+            run: cmake --build build --target sdl-min --config Release
+          - name: Upload Build
+            uses: actions/upload-artifact@v4
+            if: ${{ matrix.target != 'WindowsStore' }}
+            with: 
+                name: sdl-min-${{ matrix.target }}-${{ matrix.arch }}
+                path: |
+                    build/Release/*.exe
+                    build/Release/*.dll
+                    build/Release/*.ttf
+                    build/Release/*.ogg
+                    build/Release/*.svg
+                    
+    build-linux:
+        name: Build for Linux
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+            with:
+                submodules: recursive
+          - name: Install Dependencies
+            run: sudo apt install -y --no-install-recommends build-essential git cmake ninja-build gnome-desktop-testing libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libudev-dev fcitx-libs-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev
+          - name: Configure
+            run: cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -S . -B build
+          - name: Build
+            run: cmake --build build --target sdl-min --config Release
+          - name: Upload Build
+            uses: actions/upload-artifact@v4
+            with: 
+                name: sdl-min-Linux
+                path: |
+                    build/Release/sdl-min
+                    build/Release/*.so
+                    build/Release/*.ttf
+                    build/Release/*.ogg
+                    build/Release/*.svg
+
+    build-mac:
+        name: Build for Apple
+        runs-on: macos-14
+        strategy:
+          fail-fast: false
+          matrix:
+              target: [iOS, tvOS, visionOS, '']
+
+        steps:
+          - uses: actions/checkout@v4
+            with:
+                submodules: recursive
+          - name: Setup Xcode version
+            uses: maxim-lobanov/setup-xcode@v1.6.0
+            with:
+                xcode-version: "16.1"
+          - name: Configure
+            run: cmake -G "Xcode" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO -DCMAKE_SYSTEM_NAME=${{ matrix.target }} -DSDL_STATIC=ON -DSDL_SHARED=OFF -S . -B build
+          - name: Build
+            run: cmake --build build --target install --config Release
+
+          - name: Create DMG
+            run: | 
+                cd build
+                hdiutil create -size 2g -srcfolder release -volname sdl_min_apple_${{ matrix.target }} sdl_min_apple_${{ matrix.target }}.dmg
+          - name: Upload Build
+            uses: actions/upload-artifact@v4
+            with: 
+                name: sdl-min-apple-${{ matrix.target }}
+                path: build/*.dmg

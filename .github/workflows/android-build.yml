@@ -1,0 +1,32 @@
+name: Build Sample for Android
+
+on: [push, pull_request]
+
+jobs:
+  apk:
+    name: Apk Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Update the build.gradle
+        run:  |
+               cp build.gradle SDL/android-project/app/
+
+      - name: Build the APK
+        run: |
+              cd SDL/android-project/
+              ./gradlew assembleDebug
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with: 
+          name: app-debug.apk
+          path: SDL/android-project/app/build/outputs/apk/debug/app-debug.apk

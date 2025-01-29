@@ -8,7 +8,7 @@
 #include <string_view>
 #include <filesystem>
 
-constexpr uint32_t windowStartWidth = 400;
+constexpr uint32_t windowStartWidth = 640;
 constexpr uint32_t windowStartHeight = 400;
 
 struct AppContext {
@@ -17,7 +17,6 @@ struct AppContext {
     SDL_Texture* messageTex, *imageTex;
     SDL_FRect messageDest;
     SDL_AudioDeviceID audioDevice;
-    Mix_Music* music;
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
 };
 
@@ -39,7 +38,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     
     // create a window
    
-    SDL_Window* window = SDL_CreateWindow("SDL Minimal Sample", windowStartWidth, windowStartHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window* window = SDL_CreateWindow("LittleBlue", windowStartWidth, windowStartHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (not window){
         return SDL_Fail();
     }
@@ -102,15 +101,15 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
         return SDL_Fail();
     }
 
-    // load the music
-    auto musicPath = basePath / "the_entertainer.ogg";
-    auto music = Mix_LoadMUS(musicPath.string().c_str());
-    if (not music) {
-        return SDL_Fail();
-    }
-
-    // play the music (does not loop)
-    Mix_PlayMusic(music, 0);
+    // // load the music
+    // auto musicPath = basePath / "the_entertainer.ogg";
+    // auto music = Mix_LoadMUS(musicPath.string().c_str());
+    // if (not music) {
+    //     return SDL_Fail();
+    // }
+    //
+    // // play the music (does not loop)
+    // Mix_PlayMusic(music, 0);
     
     // print some information about the window
     SDL_ShowWindow(window);
@@ -133,7 +132,6 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
        .imageTex = tex,
        .messageDest = text_rect,
        .audioDevice = audioDevice,
-       .music = music,
     };
     
     SDL_SetRenderVSync(renderer, -1);   // enable vysnc
@@ -180,8 +178,6 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result) {
         SDL_DestroyRenderer(app->renderer);
         SDL_DestroyWindow(app->window);
 
-        Mix_FadeOutMusic(1000);  // prevent the music from abruptly ending.
-        Mix_FreeMusic(app->music); // this call blocks until the music has finished fading
         Mix_CloseAudio();
         SDL_CloseAudioDevice(app->audioDevice);
 

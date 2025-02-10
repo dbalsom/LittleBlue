@@ -8,6 +8,9 @@
 #include <string_view>
 #include <filesystem>
 
+#include "littleblue.h"
+#include "core/Machine.h"
+
 constexpr uint32_t windowStartWidth = 640;
 constexpr uint32_t windowStartHeight = 400;
 
@@ -18,6 +21,7 @@ struct AppContext {
     SDL_FRect messageDest;
     SDL_AudioDeviceID audioDevice;
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
+    Machine* machine;
 };
 
 SDL_AppResult SDL_Fail(){
@@ -110,7 +114,10 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     //
     // // play the music (does not loop)
     // Mix_PlayMusic(music, 0);
-    
+
+    // Create the emulator
+    auto machine = new Machine();
+
     // print some information about the window
     SDL_ShowWindow(window);
     {
@@ -132,6 +139,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
        .imageTex = tex,
        .messageDest = text_rect,
        .audioDevice = audioDevice,
+        .machine = machine,
     };
     
     SDL_SetRenderVSync(renderer, -1);   // enable vysnc
@@ -153,6 +161,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
     auto* app = (AppContext*)appstate;
+
+    // Run the machine
+    app->machine->run_for(10000);
 
     // draw a color
     auto time = SDL_GetTicks() / 1000.f;

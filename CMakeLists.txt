@@ -30,13 +30,25 @@ if (ANDROID)
 	set(EXECUTABLE_NAME main)
 	add_library(${EXECUTABLE_NAME} SHARED)
 else()
-	add_executable(${EXECUTABLE_NAME})
+	add_executable(${EXECUTABLE_NAME}
+            src/core/Machine.cpp
+            src/core/Machine.h
+            src/littleblue.h
+            src/core/bios.h
+            src/core/Dmac.h
+            src/core/pic.h
+            src/core/Pit.h
+            src/core/Ppi.h
+            src/core/Disassembler.h)
 endif()
+
+target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core  ${CMAKE_SOURCE_DIR}/src/alfe)
 
 # Add your sources to the target
 target_sources(${EXECUTABLE_NAME} 
 PRIVATE 
     src/main.cpp
+        src/core/Machine.cpp
     src/iosLaunchScreen.storyboard
 )
 # What is iosLaunchScreen.storyboard? This file describes what Apple's mobile platforms
@@ -84,6 +96,9 @@ set(SDLIMAGE_BMP OFF)
 set(SDLIMAGE_JPEG OFF)
 set(SDLIMAGE_WEBP OFF)
 add_subdirectory(SDL_image EXCLUDE_FROM_ALL)
+
+
+
 
 # Link SDL to our executable. This also makes its include directory available to us. 
 target_link_libraries(${EXECUTABLE_NAME} PUBLIC 
@@ -137,7 +152,6 @@ else()
 	    )
     endmacro()
     copy_helper("Inter-VariableFont.ttf")
-    copy_helper("the_entertainer.ogg")
     copy_helper("gs_tiger.svg")
 endif()
 

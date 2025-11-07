@@ -1,0 +1,28 @@
+test.bin
+roms/*.bak
+
+# Visual Studio user settings
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Build intermediate directories
+x64/
+x86/
+
+# Auto-generated files
+*.generated.cs
+*_i.c
+*_p.c
+*_h.h
+*.ilk
+*.meta
+*.obj
+*.pdb
+*.ipch
+*.pch
+*.idb
+*.res
+*.tlog

@@ -1,0 +1,10 @@
+String::subString() takes start and length, CharacterSource::subString() takes start and end.
+
+See http://docs.racket-lang.org/reference/windowspaths.html for details on paths starting with \\?\
+
+If use \\?\ to avoid MAX_PATH limit, we need to know the current drive - this is the first character of CurrentDirectory().windowsPath() .
+
+When parsing paths, use getCodePoint() instead of get() so that Unix paths can contain 0x0a and 0x0d bytes.
+
+We should be using substitution into templates instead of concatenation for globalization purposes.
+

@@ -1,0 +1,24 @@
+Kind                        Kind::Body
+                              Kind::TypeBody
+                              Kind::VariadicBody
+  TemplateKind                TemplateKind::Body
+
+
+Tyco                        Tyco::Body
+  Type                        Type::Body
+    AtomicType                  AtomicType::Body
+    PointerType                 PointerType::Body
+    FunctionType                FunctionType::Body
+    EnumerationType             EnumerationType::Body
+    StructuredType              StructuredType::Body
+  Template                    Template::Body
+                                Template::UninstantiatedBody
+                                Template::PartiallyInstantiatedBody
+                                Template::VariadicBody
+                                Template::InstantiatedBody
+
+Valco
+  Value
+
+Funco
+  Function

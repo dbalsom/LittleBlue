@@ -10,10 +10,12 @@
 #include "Pit.h"
 #include "Ppi.h"
 
+#define ROM_BASE_ADDRESS 0xFE000
+
 class Bus
 {
 public:
-    Bus() : _ram(0xa0000), _rom(0x8000)
+    Bus() : _ram(0xa0000), _rom(0x2000)
     {
         _rom.assign(U18, U18 + sizeof(U18));
         _pit.setGate(0, true);
@@ -93,8 +95,9 @@ public:
         // http://www.vcfed.org/forum/showthread.php?29211-Purpose-of-U90-in-XT-second-revision-board
         bool hasDMACFix = true;
 
-        if (_type != 2 || (_address & 0x3e0) != 0x000 || !hasDMACFix)
+        if (_type != 2 || (_address & 0x3e0) != 0x000 || !hasDMACFix) {
             _lastNonDMAReady = nonDMAReady();
+        }
         //if (_previousLock && !_lock)
         //    _previousLock = false;
         //_previousLock = _lock;
@@ -174,9 +177,12 @@ public:
     }
     uint8_t read()
     {
-        if (_type == 0) // Interrupt acknowledge
+        if (_type == 0) {
+            // Interrupt acknowledge
             return _pic.interruptAcknowledge();
-        if (_type == 1) { // Read port
+        }
+        if (_type == 1) {
+            // Read from IO port
             switch (_address & 0x3e0) {
                 case 0x00: return _dmac.read(_address & 0x0f);
                 case 0x20: return _pic.read(_address & 1);
@@ -189,12 +195,18 @@ public:
                     }
 
             }
+            // Default: return open bus.
             return 0xff;
         }
-        if (_address >= 0xf8000)
-            return _rom[_address - 0xf8000];
-        if (_address >= 0xa0000)
+        if (_address >= ROM_BASE_ADDRESS) {
+            // Read from ROM.
+            return _rom[_address - ROM_BASE_ADDRESS];
+        }
+        if (_address >= 0xa0000) {
+            // Return open bus.
             return 0xff;
+        }
+        // Default state: return RAM contents.
         return _ram[_address];
     }
     bool interruptPending() { return _pic.interruptPending(); }

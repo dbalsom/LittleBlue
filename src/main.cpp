@@ -4,6 +4,9 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #include <SDL3_mixer/SDL_mixer.h>
 #include <SDL3_image/SDL_image.h>
+#include <imgui/imgui.h>
+#include <imgui/backends/imgui_impl_sdl3.h>
+#include <imgui/backends/imgui_impl_sdlrenderer3.h>
 #include <cmath>
 #include <string_view>
 #include <filesystem>
@@ -25,6 +28,7 @@ struct AppContext {
     MIX_Mixer* mixer;
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
     Machine* machine;
+    bool running{true};
 };
 
 SDL_AppResult SDL_Fail(){
@@ -49,12 +53,23 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     if (not window){
         return SDL_Fail();
     }
-    
+
     // create a renderer
     SDL_Renderer* renderer = SDL_CreateRenderer(window, NULL);
     if (not renderer){
         return SDL_Fail();
     }
+
+    // Initialize ImGui
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+
+    ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
+    ImGui_ImplSDLRenderer3_Init(renderer);
 
     auto basePathPtr = SDL_GetBasePath();
     if (not basePathPtr){
@@ -62,28 +77,22 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     }
     const std::filesystem::path basePath = basePathPtr;
 
-    const auto fontPath = basePath / "Inter-VariableFont.ttf";
-    TTF_Font* font = TTF_OpenFont(fontPath.string().c_str(), 36);
-    if (not font) {
-        return SDL_Fail();
-    }
-
-    // render the font to a surface
-    const std::string_view text = "Hello SDL!";
-    SDL_Surface* surfaceMessage = TTF_RenderText_Solid(font, text.data(), text.length(), { 255,255,255 });
-
-    // make a texture from the surface
-    SDL_Texture* messageTex = SDL_CreateTextureFromSurface(renderer, surfaceMessage);
-
-    // we no longer need the font or the surface, so we can destroy those now.
-    TTF_CloseFont(font);
-    SDL_DestroySurface(surfaceMessage);
-
-    // load the SVG
-    auto svg_surface = IMG_Load((basePath / "gs_tiger.svg").string().c_str());
-    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, svg_surface);
-    SDL_DestroySurface(svg_surface);
-    
+    // const auto fontPath = basePath / "Inter-VariableFont.ttf";
+    // TTF_Font* font = TTF_OpenFont(fontPath.string().c_str(), 36);
+    // if (not font) {
+    //     return SDL_Fail();
+    // }
+    //
+    // // render the font to a surface
+    // const std::string_view text = "Hello SDL!";
+    // SDL_Surface* surfaceMessage = TTF_RenderText_Solid(font, text.data(), text.length(), { 255,255,255 });
+    //
+    // // make a texture from the surface
+    // SDL_Texture* messageTex = SDL_CreateTextureFromSurface(renderer, surfaceMessage);
+    //
+    // // we no longer need the font or the surface, so we can destroy those now.
+    // TTF_CloseFont(font);
+    // SDL_DestroySurface(surfaceMessage);
 
     // get the on-screen dimensions of the text. this is necessary for rendering it
     auto messageTexProps = SDL_GetTextureProperties(messageTex);
@@ -145,34 +154,85 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 }
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
-    auto* app = (AppContext*)appstate;
-    
-    if (event->type == SDL_EVENT_QUIT) {
-        app->app_quit = SDL_APP_SUCCESS;
+    auto* app = static_cast<AppContext*>(appstate);
+
+    ImGui_ImplSDL3_ProcessEvent(event);
+    switch (event->type) {
+        case SDL_EVENT_MOUSE_MOTION:
+            SDL_Log("MOUSE MOTION: x=%f y=%f rel=(%f,%f)",
+                    event->motion.x, event->motion.y,
+                    event->motion.xrel, event->motion.yrel);
+            break;
+
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            SDL_Log("MOUSE BUTTON DOWN: button=%d at (%f,%f)",
+                    event->button.button, event->button.x, event->button.y);
+            break;
+
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+            SDL_Log("MOUSE BUTTON UP: button=%d at (%f,%f)",
+                    event->button.button, event->button.x, event->button.y);
+            break;
+
+        case SDL_EVENT_MOUSE_WHEEL:
+            SDL_Log("MOUSE WHEEL: x=%f y=%f", event->wheel.x, event->wheel.y);
+            break;
+
+        case SDL_EVENT_QUIT:
+            SDL_Log("QUIT event");
+            app->running = false;
+            break;
+
+        default:
+            break;
     }
 
     return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
-    auto* app = (AppContext*)appstate;
-
+    auto* app = static_cast<AppContext*>(appstate);
     // Run the machine
     app->machine->run_for(10000);
 
-    // draw a color
-    auto time = SDL_GetTicks() / 1000.f;
-    auto red = (std::sin(time) + 1) / 2.0 * 255;
-    auto green = (std::sin(time / 2) + 1) / 2.0 * 255;
-    auto blue = (std::sin(time) * 2 + 1) / 2.0 * 255;
-    
-    SDL_SetRenderDrawColor(app->renderer, red, green, blue, SDL_ALPHA_OPAQUE);
+    if (!app->running) {
+        return SDL_APP_SUCCESS;  // stop calling SDL_AppIterate
+    }
+
+    // Ensure no stale scaling state
+    SDL_SetRenderViewport(app->renderer, nullptr);
+    SDL_SetRenderClipRect(app->renderer, nullptr);
+
+    ImGui_ImplSDL3_NewFrame();
+    ImGui_ImplSDLRenderer3_NewFrame();
+
+    ImGui::NewFrame();
+
+    ImGui::ShowDemoWindow();
+
+    ImGui::Begin("Hello");
+    ImGui::Text("This is Dear ImGui running on SDL3!");
+    ImGui::End();
+
+    const ImVec2 p = ImGui::GetMousePos();
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::Begin("Input debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::Text("ImGui::GetIO: (%.1f, %.1f)", io.MousePos.x, io.MousePos.y);
+    ImGui::Text("ImGui::GetMousePos(): (%.1f, %.1f)", p.x, p.y);
+    ImGui::Text("WantCaptureMouse: %s", io.WantCaptureMouse ? "true" : "false");
+    ImGui::End();
+
+
+
+    SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
     SDL_RenderClear(app->renderer);
 
     // Renderer uses the painter's algorithm to make the text appear above the image, we must render the image first.
-    SDL_RenderTexture(app->renderer, app->imageTex, NULL, NULL);
+    //SDL_RenderTexture(app->renderer, app->imageTex, NULL, NULL);
+    ImGui::Render();
     SDL_RenderTexture(app->renderer, app->messageTex, NULL, &app->messageDest);
 
+    ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), app->renderer);
     SDL_RenderPresent(app->renderer);
 
     return app->app_quit;

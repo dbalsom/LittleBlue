@@ -24,23 +24,19 @@ endif()
 # Set the name of the executable
 set(EXECUTABLE_NAME ${PROJECT_NAME})
 
-# Create an executable or a shared library based on the platform and add our sources to it
-if (ANDROID)
-	# The SDL java code is hardcoded to load libmain.so on android, so we need to change EXECUTABLE_NAME
-	set(EXECUTABLE_NAME main)
-	add_library(${EXECUTABLE_NAME} SHARED)
-else()
-	add_executable(${EXECUTABLE_NAME}
-            src/core/Machine.cpp
-            src/core/Machine.h
-            src/littleblue.h
-            src/core/bios.h
-            src/core/Dmac.h
-            src/core/pic.h
-            src/core/Pit.h
-            src/core/Ppi.h
-            src/core/Disassembler.h)
-endif()
+add_executable(${EXECUTABLE_NAME}
+        src/core/Machine.cpp
+        src/core/Machine.h
+        src/littleblue.h
+        src/core/bios.h
+        src/core/font.h
+        src/core/Dmac.h
+        src/core/pic.h
+        src/core/Pit.h
+        src/core/Ppi.h
+        src/core/Disassembler.h
+        src/core/Cga.cpp
+        src/core/Cga.h)
 
 target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core  ${CMAKE_SOURCE_DIR}/src/alfe)
 
@@ -76,6 +72,25 @@ endif()
 # pollute upwards into our configuration.
 add_subdirectory(SDL EXCLUDE_FROM_ALL)
 
+add_library(imgui
+        imgui/imgui.cpp
+        imgui/imgui_draw.cpp
+        imgui/imgui_tables.cpp
+        imgui/imgui_widgets.cpp
+        imgui/imgui_demo.cpp
+        imgui/backends/imgui_impl_sdl3.cpp
+        imgui/backends/imgui_impl_sdlrenderer3.cpp
+)
+
+target_include_directories(imgui
+        PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}
+                ${CMAKE_CURRENT_SOURCE_DIR}/imgui
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/imgui
+                ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends
+)
+
+target_link_libraries(imgui PUBLIC SDL3::SDL3)
+
 # If you don't want SDL_ttf, then remove this section.
 set(SDLTTF_VENDORED ON) # tell SDL_ttf to build its own dependencies
 add_subdirectory(SDL_ttf EXCLUDE_FROM_ALL)	
@@ -101,11 +116,12 @@ add_subdirectory(SDL_image EXCLUDE_FROM_ALL)
 
 
 # Link SDL to our executable. This also makes its include directory available to us. 
-target_link_libraries(${EXECUTABLE_NAME} PUBLIC 
+target_link_libraries(${EXECUTABLE_NAME} PUBLIC
+        imgui
 	SDL3_ttf::SDL3_ttf      # remove if you are not using SDL_ttf
 	SDL3_mixer::SDL3_mixer  # remove if you are not using SDL_mixer
 	SDL3_image::SDL3_image	# remove if you are not using SDL_image
-    SDL3::SDL3              # If using satelite libraries, SDL must be the last item in the list. 
+    SDL3::SDL3              # If using satellite libraries, SDL must be the last item in the list.
 )
 target_compile_definitions(${EXECUTABLE_NAME} PUBLIC SDL_MAIN_USE_CALLBACKS)
 

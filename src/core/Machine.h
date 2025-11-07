@@ -16,8 +16,8 @@ public:
         _cpu.reset();
         _cpu.setExtents(
             -4,
-            100,
-            100,
+            1000,
+            1000,
             0,
             0
             );

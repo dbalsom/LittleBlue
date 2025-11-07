@@ -22,8 +22,6 @@ bool init_audio(SDL_AudioDeviceID *outAudioDevice, MIX_Mixer **outMixer);
 struct AppContext {
     SDL_Window* window;
     SDL_Renderer* renderer;
-    SDL_Texture* messageTex, *imageTex;
-    SDL_FRect messageDest;
     SDL_AudioDeviceID audioDevice;
     MIX_Mixer* mixer;
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
@@ -95,13 +93,13 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     // SDL_DestroySurface(surfaceMessage);
 
     // get the on-screen dimensions of the text. this is necessary for rendering it
-    auto messageTexProps = SDL_GetTextureProperties(messageTex);
-    SDL_FRect text_rect{
-            .x = 0,
-            .y = 0,
-            .w = float(SDL_GetNumberProperty(messageTexProps, SDL_PROP_TEXTURE_WIDTH_NUMBER, 0)),
-            .h = float(SDL_GetNumberProperty(messageTexProps, SDL_PROP_TEXTURE_HEIGHT_NUMBER, 0))
-    };
+    // auto messageTexProps = SDL_GetTextureProperties(messageTex);
+    // SDL_FRect text_rect{
+    //         .x = 0,
+    //         .y = 0,
+    //         .w = float(SDL_GetNumberProperty(messageTexProps, SDL_PROP_TEXTURE_WIDTH_NUMBER, 0)),
+    //         .h = float(SDL_GetNumberProperty(messageTexProps, SDL_PROP_TEXTURE_HEIGHT_NUMBER, 0))
+    // };
 
     // Initialize audio
     SDL_AudioDeviceID audioDevice;
@@ -138,9 +136,6 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     *appstate = new AppContext{
        .window = window,
        .renderer = renderer,
-       .messageTex = messageTex,
-       .imageTex = tex,
-       .messageDest = text_rect,
        .audioDevice = audioDevice,
         .mixer = mixer,
         .machine = machine,
@@ -222,15 +217,10 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     ImGui::Text("WantCaptureMouse: %s", io.WantCaptureMouse ? "true" : "false");
     ImGui::End();
 
-
-
     SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
     SDL_RenderClear(app->renderer);
 
-    // Renderer uses the painter's algorithm to make the text appear above the image, we must render the image first.
-    //SDL_RenderTexture(app->renderer, app->imageTex, NULL, NULL);
     ImGui::Render();
-    SDL_RenderTexture(app->renderer, app->messageTex, NULL, &app->messageDest);
 
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), app->renderer);
     SDL_RenderPresent(app->renderer);
@@ -239,8 +229,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 }
 
 void SDL_AppQuit(void* appstate, SDL_AppResult result) {
-    auto* app = (AppContext*)appstate;
-    if (app) {
+    if (const auto* app = static_cast<AppContext*>(appstate)) {
         SDL_DestroyRenderer(app->renderer);
         SDL_DestroyWindow(app->window);
 
@@ -249,6 +238,7 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result) {
 
         delete app;
     }
+
     TTF_Quit();
     MIX_Quit();
 

@@ -45,19 +45,7 @@ target_sources(${EXECUTABLE_NAME}
 PRIVATE 
     src/main.cpp
         src/core/Machine.cpp
-    src/iosLaunchScreen.storyboard
 )
-# What is iosLaunchScreen.storyboard? This file describes what Apple's mobile platforms
-# should show the user while the application is starting up. If you don't include one,
-# then you get placed in a compatibility mode that does not allow HighDPI.
-# This file is referenced inside Info.plist.in, where it is marked as the launch screen file.
-# It is also ignored on non-Apple platforms. 
-
-# To get an app icon on Apple platforms, add it to your executable.
-# Afterward, the image file in Info.plist.in.
-if(APPLE)
-    target_sources("${EXECUTABLE_NAME}" PRIVATE "src/logo.png")
-endif()
 
 # Set C++ version
 target_compile_features(${EXECUTABLE_NAME} PUBLIC cxx_std_20)
@@ -112,9 +100,6 @@ set(SDLIMAGE_JPEG OFF)
 set(SDLIMAGE_WEBP OFF)
 add_subdirectory(SDL_image EXCLUDE_FROM_ALL)
 
-
-
-
 # Link SDL to our executable. This also makes its include directory available to us. 
 target_link_libraries(${EXECUTABLE_NAME} PUBLIC
         imgui
@@ -138,20 +123,17 @@ if (APPLE)
         set_property(SOURCE ${FILE} PROPERTY MACOSX_PACKAGE_LOCATION "Resources/${relpath}")
     endmacro()
     add_resource("${CMAKE_CURRENT_LIST_DIR}/src/Inter-VariableFont.ttf")
-    add_resource("${CMAKE_CURRENT_LIST_DIR}/src/gs_tiger.svg")
 elseif(EMSCRIPTEN)
     # on the web, we have to put the files inside of the webassembly
     # somewhat unintuitively, this is done via a linker argument.
     target_link_libraries(${EXECUTABLE_NAME} PRIVATE 
         "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/src/Inter-VariableFont.ttf@/\""
-        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/src/gs_tiger.svg@/\""
     )
 else()
     if (ANDROID)
         file(MAKE_DIRECTORY "${MOBILE_ASSETS_DIR}")    # we need to create the project Assets dir otherwise CMake won't copy our assets.
     endif()
 
-    
     macro(copy_helper filename)
         if (ANDROID)
             # MOBILE_ASSETS_DIR is set in the gradle file via the cmake command line and points to the Android Studio Assets folder. 
@@ -168,7 +150,6 @@ else()
 	    )
     endmacro()
     copy_helper("Inter-VariableFont.ttf")
-    copy_helper("gs_tiger.svg")
 endif()
 
 # set some extra configs for each platform
@@ -209,3 +190,4 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
     set(CPACK_GENERATOR "DragNDrop")
     include(CPack)
 endif()
+

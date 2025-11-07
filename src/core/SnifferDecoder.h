@@ -28,12 +28,13 @@ public:
         _d = -1;
         _queueLength = 0;
         _lastS = 0;
-        _cpu_s = 7;
+        _cpu_status = 7;
         _cpu_qs = 0;
         _cpu_next_qs = 0;
 
         _disassembler.reset();
     }
+
     std::string getLine()
     {
         // Character representing queue status as of last cycle.
@@ -45,7 +46,7 @@ public:
         static constexpr char sc[] = "ARWHCrwp";
         static constexpr char dmasc[] = " h:H";
 
-        auto hex = [](u_int32_t value, int width, bool showPrefix = false) -> std::string {
+        auto hex = [](uint32_t value, int width, bool showPrefix = false) -> std::string {
             return std::format("{}{:0{}X}", showPrefix ? "0x" : "", value, width);
         };
 
@@ -56,10 +57,16 @@ public:
         if (_bus_ale) _bus_ale = false;
 
         // Emit address bus value
-        line += "[" + hex(_bus_address, 5, false) + "] ";
+        line += hex(_bus_address, 5, false) + ":";
+        line += hex(_cpu_address, 5, false) + ":";
+
+        // Emit data bus value when defined
+        line += _isaDataFloating ? "  " : hex(_bus_data, 2, false);
+
+        line += " ";
 
         // Emit bus status
-        switch (_cpu_s) {
+        switch (_cpu_status) {
             case 0: line += "INTA"; break;
             case 1: line += "IOR "; break;
             case 2: line += "IOW "; break;
@@ -71,14 +78,10 @@ public:
             default: break;
         }
 
-        line += _isaDataFloating ? "??" : hex(_bus_data, 2, false);
-
-        line += " " + std::string(1, qsc[_cpu_qs]) + sc[_cpu_s]
+        line += " " + std::string(1, qsc[_cpu_qs]) + sc[_cpu_status]
              + (_cpu_rqgt0 ? "G" : ".") + (_cpu_ready ? "." : "z")
              + (_cpu_test ? "T" : ".") + (_cpu_lock ? "L" : ".")
-             + "  " + hex(_bus_address, 5, false) + " ";
-
-        line += _isaDataFloating ? "??" : hex(_bus_data, 2, false);
+             + "  ";
 
         line += " " + hex(_bus_dma, 2, false) + dmasc[_dmas] + " "
              + hex(_bus_irq, 2, false) + (_int ? "I" : " ") + " "
@@ -89,7 +92,7 @@ public:
              + (_bus_tc ? "T" : ".");
 
         line += "  ";
-        if (_cpu_s != 7 && _cpu_s != 3)
+        if (_cpu_status != 7 && _cpu_status != 3)
             switch (_tNext) {
                 case 0:
                 case 4:
@@ -163,7 +166,10 @@ public:
             case 5: line += "SW"; break;
             default: line += "!d"; _t = 0; break;
         }
+
         line += " ";
+
+        // Emit instruction if applicable
         std::string instruction;
         if (_cpu_qs != 0) {
             if (_cpu_qs == 2)
@@ -184,7 +190,7 @@ public:
             if (_tNext == 4 && _d == 4)
                 line += "!e";
             std::string seg;
-            switch (_cpu_ad & 0x30000) {
+            switch (_cpu_address & 0x30000) {
                 case 0x00000: seg = "ES "; break;
                 case 0x10000: seg = "SS "; break;
                 case 0x20000: seg = "CS "; break;
@@ -229,7 +235,7 @@ public:
         else
             line += " ";
         line += " " + instruction;
-        _lastS = _cpu_s;
+        _lastS = _cpu_status;
         _t = _tNext;
         if (_t == 4 || _d == 4) {
             _bus_ior = false;
@@ -246,10 +252,10 @@ public:
     }
     void queueOperation(int qs) { _cpu_next_qs = qs; }
     void setStatus(int s) {
-        _cpu_last_s = _cpu_s;
-        _cpu_s = s;
+        _cpu_last_status = _cpu_status;
+        _cpu_status = s;
         // Bus proceeding from PASV to any other status triggers ALE signal.
-        if ((_cpu_last_s == 7) && (_cpu_s < 7)) {
+        if ((_cpu_last_status == 7) && (_cpu_status < 7)) {
             _bus_ale = true;
         }
         else {
@@ -258,25 +264,25 @@ public:
     }
     void setStatusHigh(int segment)
     {
-        _cpu_ad &= 0xcffff;
+        _cpu_address &= 0xcffff;
         switch (segment) {
             case 0:  // ES
                 break;
             case 2:  // SS
-                _cpu_ad |= 0x10000;
+                _cpu_address |= 0x10000;
                 break;
             case 3:  // DS
-                _cpu_ad |= 0x30000;
+                _cpu_address |= 0x30000;
                 break;
             default: // CS or none
-                _cpu_ad |= 0x20000;
+                _cpu_address |= 0x20000;
                 break;
         }
         setBusFloating();
     }
     void setInterruptFlag(bool intf)
     {
-        _cpu_ad = (_cpu_ad & 0xbffff) | (intf ? 0x40000 : 0);
+        _cpu_address = (_cpu_address & 0xbffff) | (intf ? 0x40000 : 0);
     }
     void setBusOperation(int s)
     {
@@ -290,14 +296,14 @@ public:
     }
     void setData(uint8_t data)
     {
-        _cpu_ad = (_cpu_ad & 0xfff00) | data;
+        _cpu_address = (_cpu_address & 0xfff00) | data;
         _bus_data = data;
         _cpuDataFloating = false;
         _isaDataFloating = false;
     }
     void setAddress(uint32_t address)
     {
-        _cpu_ad = address;
+        _cpu_address = address;
         _bus_address = address;
         _cpuDataFloating = false;
     }
@@ -336,7 +342,7 @@ private:
     // A16/S3        O
     // A15..A8       O ADDRESS BUS: These lines provide address bits 8 through 15 for the entire bus cycle (T1±T4). These lines do not have to be latched by ALE to remain valid. A15±A8 are active HIGH and float to 3-state OFF during interrupt acknowledge and local bus ``hold acknowledge''.
     // AD7..AD0     IO ADDRESS DATA BUS: These lines constitute the time multiplexed memory/IO address (T1) and data (T2, T3, Tw, T4) bus. These lines are active HIGH and float to 3-state OFF during interrupt acknowledge and local bus ``hold acknowledge''.
-    uint32_t _cpu_ad = 0;
+    uint32_t _cpu_address = 0;
     // QS0           O QUEUE STATUS: provide status to allow external tracking of the internal 8088 instruction queue. The queue status is valid during the CLK cycle after which the queue operation is performed.
     // QS1           0 = No operation, 1 = First Byte of Opcode from Queue, 2 = Empty the Queue, 3 = Subsequent Byte from Queue
     uint8_t _cpu_qs = 0;
@@ -344,8 +350,8 @@ private:
     // -S0           O STATUS: is active during clock high of T4, T1, and T2, and is returned to the passive state (1,1,1) during T3 or during Tw when READY is HIGH. This status is used by the 8288 bus controller to generate all memory and I/O access control signals. Any change by S2, S1, or S0 during T4 is used to indicate the beginning of a bus cycle, and the return to the passive state in T3 and Tw is used to indicate the end of a bus cycle. These signals float to 3-state OFF during ``hold acknowledge''. During the first clock cycle after RESET becomes active, these signals are active HIGH. After this first clock, they float to 3-state OFF.
     // -S1           0 = Interrupt Acknowledge, 1 = Read I/O Port, 2 = Write I/O Port, 3 = Halt, 4 = Code Access, 5 = Read Memory, 6 = Write Memory, 7 = Passive
     // -S2
-    uint8_t _cpu_s = 7;
-    uint8_t _cpu_last_s = 7; // The last CPU status. We can derive ALE from the change from 7 (PASV) to any other status.
+    uint8_t _cpu_status = 7;
+    uint8_t _cpu_last_status = 7; // The last CPU status. We can derive ALE from the change from 7 (PASV) to any other status.
 
     bool _cpu_rqgt0;    // -RQ/-GT0 !87 IO REQUEST/GRANT: pins are used by other local bus masters to force the processor to release the local bus at the end of the processor's current bus cycle. Each pin is bidirectional with RQ/GT0 having higher priority than RQ/GT1. RQ/GT has an internal pull-up resistor, so may be left unconnected.
     bool _cpu_ready;    // READY        I  READY: is the acknowledgement from the addressed memory or I/O device that it will complete the data transfer. The RDY signal from memory or I/O is synchronized by the 8284 clock generator to form READY. This signal is active HIGH. The 8088 READY input is not synchronized. Correct operation is not guaranteed if the set up and hold times are not met.
@@ -371,7 +377,7 @@ private:
     bool _bus_iow;      // -IOW         O -I/O Write Command: This command line instructs an I/O device to read the data on the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
     bool _bus_memr;     // -MEMR        O Memory Read Command: This command line instructs the memory to drive its data onto the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
     bool _bus_memw;     // -MEMW        O Memory Write Command: This command line instructs the memory to store the data present on the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
-    bool _bus_iochrdy;  // +I/O CH RDY I  I/O Channel Ready: This line, normally high (ready), is pulled low (not ready) by a memory or I/O device to lengthen I/O or memory cycles. It allows slower devices to attach to the I/O channel with a minimum of difficulty. Any slow device using this line should drive it low immediately upon detecting a valid address and a read or write command. This line should never be held low longer than 10 clock cycles. Machine cycles (I/O or memory) are extended by an integral number of CLK cycles (210 ns).
+    bool _bus_iochrdy;  // +I/O CH RDY  I I/O Channel Ready: This line, normally high (ready), is pulled low (not ready) by a memory or I/O device to lengthen I/O or memory cycles. It allows slower devices to attach to the I/O channel with a minimum of difficulty. Any slow device using this line should drive it low immediately upon detecting a valid address and a read or write command. This line should never be held low longer than 10 clock cycles. Machine cycles (I/O or memory) are extended by an integral number of CLK cycles (210 ns).
     bool _bus_aen;      // +AEN         O Address Enable: This line is used to de-gate the processor and other devices from the I/O channel to allow DMA transfers to take place. When this line is active (high), the DMA controller has control of the address bus, data bus, read command lines (memory and I/O), and the write command lines (memory and I/O).
     bool _bus_tc;       // +T/C         O Terminal Count: This line provides a pulse when the terminal count for any DMA channel is reached. This signal is active high.
     bool _cpuDataFloating;

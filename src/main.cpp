@@ -14,12 +14,15 @@
 constexpr uint32_t windowStartWidth = 640;
 constexpr uint32_t windowStartHeight = 400;
 
+bool init_audio(SDL_AudioDeviceID *outAudioDevice, MIX_Mixer **outMixer);
+
 struct AppContext {
     SDL_Window* window;
     SDL_Renderer* renderer;
     SDL_Texture* messageTex, *imageTex;
     SDL_FRect messageDest;
     SDL_AudioDeviceID audioDevice;
+    MIX_Mixer* mixer;
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
     Machine* machine;
 };
@@ -52,17 +55,12 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     if (not renderer){
         return SDL_Fail();
     }
-    
-    // load the font
-#if __ANDROID__
-    std::filesystem::path basePath = "";   // on Android we do not want to use basepath. Instead, assets are available at the root directory.
-#else
+
     auto basePathPtr = SDL_GetBasePath();
-     if (not basePathPtr){
+    if (not basePathPtr){
         return SDL_Fail();
     }
-     const std::filesystem::path basePath = basePathPtr;
-#endif
+    const std::filesystem::path basePath = basePathPtr;
 
     const auto fontPath = basePath / "Inter-VariableFont.ttf";
     TTF_Font* font = TTF_OpenFont(fontPath.string().c_str(), 36);
@@ -96,14 +94,10 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
             .h = float(SDL_GetNumberProperty(messageTexProps, SDL_PROP_TEXTURE_HEIGHT_NUMBER, 0))
     };
 
-    // init SDL Mixer
-    auto audioDevice = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
-    if (not audioDevice) {
-        return SDL_Fail();
-    }
-    if (not Mix_OpenAudio(audioDevice, NULL)) {
-        return SDL_Fail();
-    }
+    // Initialize audio
+    SDL_AudioDeviceID audioDevice;
+    MIX_Mixer *mixer;
+    init_audio(&audioDevice, &mixer);
 
     // // load the music
     // auto musicPath = basePath / "the_entertainer.ogg";
@@ -139,6 +133,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
        .imageTex = tex,
        .messageDest = text_rect,
        .audioDevice = audioDevice,
+        .mixer = mixer,
         .machine = machine,
     };
     
@@ -189,14 +184,52 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result) {
         SDL_DestroyRenderer(app->renderer);
         SDL_DestroyWindow(app->window);
 
-        Mix_CloseAudio();
+        MIX_DestroyMixer(app->mixer);
         SDL_CloseAudioDevice(app->audioDevice);
 
         delete app;
     }
     TTF_Quit();
-    Mix_Quit();
+    MIX_Quit();
 
     SDL_Log("Application quit successfully!");
     SDL_Quit();
+}
+
+bool init_audio(SDL_AudioDeviceID *outAudioDevice, MIX_Mixer **outMixer)
+{
+    // Desired audio spec
+    SDL_AudioSpec spec;
+    SDL_zero(spec);
+    spec.freq = 44100;
+    spec.format = SDL_AUDIO_S16;   // signed 16-bit samples
+    spec.channels = 2;             // stereo
+
+    // 1) Init SDL audio
+    SDL_AudioDeviceID audioDevice = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
+    if (not audioDevice) {
+        SDL_Log("Failed to open audio device: %s", SDL_GetError());
+        return false;
+    }
+
+    // 2) Init SDL_mixer
+    if (not MIX_Init()) {  // returns bool in SDL3_mixer
+        SDL_Log("MIX_Init failed: %s", SDL_GetError());
+        return false;
+    }
+
+    // 3) Create a mixer bound to the default playback device.
+    MIX_Mixer *mixer = MIX_CreateMixerDevice(audioDevice, &spec);
+    if (not mixer) {
+        SDL_Log("Mix_OpenAudioDevice failed: %s", SDL_GetError());
+        SDL_CloseAudioDevice(audioDevice);
+        return false;
+    }
+
+    SDL_Log("Audio initialized successfully (device %u)", audioDevice);
+    if (outAudioDevice) {
+        *outAudioDevice = audioDevice;
+        *outMixer = mixer;
+    }
+    return true;
 }

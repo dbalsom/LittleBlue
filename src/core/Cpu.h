@@ -3,8 +3,8 @@
 
 #include <cstdint>
 #include <iostream>
-#include <ostream>
 #include <string>
+#include <format>
 #include <SDL3/SDL_log.h>
 
 #include "../littleblue.h"
@@ -12,6 +12,8 @@
 #include "SnifferDecoder.h"
 
 #include "microcode.h"
+
+#define LINE_ENDING_SIZE 1
 
 class Cpu
 {
@@ -51,10 +53,13 @@ public:
         auto byteData = reinterpret_cast<uint8_t*>(&_registers[24]);
         int bigEndian = *byteData;
         int byteNumbers[8] = {0, 2, 4, 6, 1, 3, 5, 7};
-        for (int i = 0 ; i < 8; ++i)
+        for (int i = 0 ; i < 8; ++i) {
             _byteRegisters[i] = &byteData[byteNumbers[i] ^ bigEndian];
+        }
         _registers[21] = 0xffff;
         _registers[23] = 0;
+
+        std::cout << "CPU initializing." << std::endl;
 
         // Initialize microcode data and put it in a format more suitable for
         // software emulation.
@@ -63,28 +68,44 @@ public:
         // Microcode has 512 instruction words.
         uint32_t instructions[512];
         // Initialize all instructions to 0 prior to decoding.
-        for (int i = 0; i < 512; ++i)
+        for (int i = 0; i < 512; ++i) {
             instructions[i] = 0;
+        }
 
+        // Load the main microcode ROM
+        // Iterate through the four vertical blocks of ROM data.
         for (int y = 0; y < 4; ++y) {
-            int h = (y < 3 ? 24 : 12);
-            for (int half = 0; half < 2; ++half) {
-                std::string filename = (half == 1 ? "l" : "r") +
-                    decimal(y) + (use8086 ? "a" : "") + ".txt";
 
+            // Height of the first three blocks is 24, last block is 12.
+            int h = (y < 3 ? 24 : 12);
+
+            // Iterate through left and right halves of each block.
+            for (int half = 0; half < 2; ++half) {
+                std::string filename = (half == 1 ? "l" : "r") + decimal(y) + (use8086 ? "a" : "") + ".txt";
+
+                std::cout << filename << std::endl;
                 std::string_view s = get_file(filename);
+
+                std::cout << s;
+
+                // Iterate through height of block (24 or 12 rows).
                 for (int yy = 0; yy < h; ++yy) {
+                    // Instruction base row index (24 rows per block).
                     int ib = y * 24 + yy;
-                    for (int xx = 0; xx < 64; ++xx) {
-                        int b = (s[yy * 66 + (63 - xx)] == '0' ? 1 : 0);
-                        instructions[xx * 8 + half * 4 + yy % 4] |=
-                            b << (20 - (ib >> 2));
+                    // Iterate through the width of the ROM block (64).
+                    for (int xx = 0; xx < 64; ++xx)
+                    {
+                        int b = s[yy * (64 + LINE_ENDING_SIZE) + (63 - xx)] == '0' ? 1 : 0;
+                        instructions[xx * 8 + half * 4 + yy % 4] |= (b << (20 - (ib >> 2)));
                     }
                 }
             }
         }
+
         for (int i = 0; i < 512; ++i) {
             int d = instructions[i];
+            std::cout << std::format("{:03X}: {:021b}\n", i, static_cast<unsigned int>(d));
+
             int s = ((d >> 13) & 1) + ((d >> 10) & 6) + ((d >> 11) & 0x18);
             int dd = ((d >> 20) & 1) + ((d >> 18) & 2) + ((d >> 16) & 4) +
                 ((d >> 14) & 8) + ((d >> 12) & 0x10);
@@ -98,34 +119,56 @@ public:
             _microcode[i * 4 + 3] = d & 0xff;
         }
 
+        std::cout << "Instruction words loaded." << std::endl;
+
+        // Read in the stage1 decoder PLA ROM logic.
         int stage1[128];
-        for (int x = 0; x < 128; ++x)
+        for (int x = 0; x < 128; ++x) {
             stage1[x] = 0;
+        }
         for (int g = 0; g < 9; ++g) {
+            // Width of each ROM file is 16, except for groups 0 and 8 which are 8.
             int n = 16;
-            if (g == 0 || g == 8)
+            if (g == 0 || g == 8) {
                 n = 8;
+            }
+
+            // This array provides the X bit position offset for each group.
             int xx[9] = { 0, 8, 24, 40, 56, 72, 88, 104, 120 };
             int xp = xx[g];
+
+            // Iterate through top and bottom halves of each ROM file.
             for (int h = 0; h < 2; ++h) {
                 std::string filename = decimal(g) + (h == 0 ? "t" : "b") + ".txt";
+                std::cout << "Loading microcode file: " << filename << std::endl;
                 std::string_view s = get_file(filename);
+
+                // Iterate through the height of each ROM file (11 rows).
                 for (int y = 0; y < 11; ++y) {
                     for (int x = 0; x < n; ++x) {
-                        int b = (s[y * (n + 2) + x] == '0' ? 1 : 0);
-                        if (b != 0)
+                        int b = s[y * (n + LINE_ENDING_SIZE) + x] == '0' ? 1 : 0;
+                        if (b != 0) {
+                            // Stage1 is written in reverse-order.
                             stage1[127 - (x + xp)] |= 1 << (y * 2 + (h ^ (y <= 2 ? 1 : 0)));
+                        }
                     }
                 }
             }
         }
+
+        // Unpack the stage1 data into a more usable format.
         for (int i = 0; i < 2048; ++i) {
             static const int ba[] = { 7, 2, 1, 0, 5, 6, 8, 9, 10, 3, 4 };
+
+            // Scan through the decoder
             for (int j = 0; j < 128; ++j) {
                 int s1 = stage1[j];
-                if (s1 == 0)
+                // Skip empty decoder slots
+                if (s1 == 0) {
                     continue;
+                }
                 bool found = true;
+                // The decoder uses 10 bit matches.
                 for (int b = 0; b < 11; ++b) {
                     int x = (s1 >> (ba[b] * 2)) & 3;
                     int ib = (i >> (10 - b)) & 1;
@@ -142,65 +185,88 @@ public:
         }
 
         std::string translationFile = use8086 ? "translation_8086.txt" : "translation_8088.txt";
+        std::cout << "Loading translation ROM: " << translationFile << std::endl;
+
         std::string_view translationString = get_file(translationFile);
         int tsp = 0;
         char c = translationString[0];
+
+        // Iterate through the first 32 rows of the translation file (empty lines will be skipped)
         for (int i = 0; i < 33; ++i) {
             int mask = 0;
             int bits = 0;
             int output = 0;
+
+            // Iterate through the 8-character match mask that starts each line, constructing a bit mask
+            // for matching.
             for (int j = 0; j < 8; ++j) {
-                if (c != '?')
+                if (c != '?') {
                     mask |= 128 >> j;
-                if (c == '1')
+                }
+                if (c == '1') {
                     bits |= 128 >> j;
+                }
                 ++tsp;
                 c = translationString[tsp];
             }
+
+            // Iterate through the 14-character addresses corresponding to each match mask
             for (int j = 0; j < 14; ++j) {
                 while (c != '0' && c != '1') {
                     ++tsp;
                     c = translationString[tsp];
                 }
-                if (c == '1')
+                if (c == '1') {
                     output |= 8192 >> j;
+                }
                 ++tsp;
                 c = translationString[tsp];
             }
-            while (c != 10 && c != 13) {
+            // Consume whitespace
+            while (c != 0x0A) {
                 ++tsp;
                 c = translationString[tsp];
             }
-            while (c == 10 || c == 13) {
+            // Consume newlines
+            while (c == 0x0A) {
                 ++tsp;
                 c = translationString[tsp];
             }
+
             for (int j = 0; j < 256; ++j) {
-                if ((j & mask) == bits)
+                if ((j & mask) == bits) {
+                    std::cout << "Translation output: " << std::format("{:02X}: {:014b}\n", j, output);
                     _translation[j] = output;
+                }
             }
         }
 
         int groupInput[38 * 18];
         int groupOutput[38 * 15];
         std::string_view groupString = get_file("group.txt");
+
+        // Iterate through each column of the group decode ROM.
         for (int x = 0; x < 38; ++x) {
+            // Iterate through the first 15 rows of the group decode ROM.
             for (int y = 0; y < 15; ++y) {
-                groupOutput[y * 38 + x] =
-                    (groupString[y * 40 + x] == '0' ? 0 : 1);
+                groupOutput[y * 38 + x] = groupString[y * (38 + LINE_ENDING_SIZE) + x] == '0' ? 0 : 1;
             }
             for (int y = 0; y < 18; ++y) {
-                int c = groupString[((y / 2) + 15) * 40 + x];
-                if ((y & 1) == 0)
-                    groupInput[y * 38 + x] = ((c == '*' || c == '0') ? 1 : 0);
-                else
-                    groupInput[y * 38 + x] = ((c == '*' || c == '1') ? 1 : 0);
+                int c = groupString[((y / 2) + 15) * (38 + LINE_ENDING_SIZE) + x];
+                if ((y & 1) == 0) {
+                    groupInput[y * 38 + x] = (c == '*' || c == '0') ? 1 : 0;
+                }
+                else {
+                    groupInput[y * 38 + x] = (c == '*' || c == '1') ? 1 : 0;
+                }
             }
         }
-        static const int groupYY[18] = { 1, 0,  3, 2,  4, 6,  5, 7,  11, 10,  12, 13,  8, 9,  15, 14,  16, 17 };
+        static const int groupYY[18] = { 1, 0, 3, 2, 4, 6, 5, 7, 11, 10, 12, 13, 8, 9, 15, 14, 16, 17 };
         for (int x = 0; x < 34; ++x) {
-            if (x == 11)
+            if (x == 11) {
                 continue;
+            }
+
             for (int i = 0; i < 0x101; ++i) {
                 bool found = true;
                 for (int j = 0; j < 9; ++j) {
@@ -214,29 +280,43 @@ public:
                 }
                 if (found) {
                     int g = 0;
-                    for (int j = 0; j < 15; ++j)
+                    for (int j = 0; j < 15; ++j) {
                         g |= groupOutput[j * 38 + x] << j;
-                    if (x == 10)
+                    }
+                    if (x == 10) {
                         g |= groupLoadRegisterImmediate;
-                    if (x == 12)
+                    }
+                    if (x == 12) {
                         g |= groupWidthInOpcodeBit3;
-                    if (x == 13)
+                    }
+                    if (x == 13) {
                         g |= groupCMC;
-                    if (x == 14)
+                    }
+                    if (x == 14) {
                         g |= groupHLT;
-                    if (x == 31)
+                    }
+                    if (x == 31) {
                         g |= groupREP;
-                    if (x == 32)
+                    }
+                    if (x == 32) {
                         g |= groupSegmentOverride;
-                    if (x == 33)
+                    }
+                    if (x == 33) {
                         g |= groupLOCK;
-                    if (i == 0xfa)
+                    }
+                    if (i == 0xFA) {
                         g |= groupCLI;
-                    if (i == 0x8e || (i & 0xe7) == 0x07)
+                    }
+                    if (i == 0x8E || (i & 0xE7) == 0x07) {
                         g |= groupLoadSegmentRegister;
+                    }
                     _groups[i] = g;
                 }
             }
+        }
+
+        for (int i = 0; i < 256; i++) {
+            std::cout << std::format("{:02X}:{:08X}\n", i, _groups[i]);
         }
 
         _microcodePointer = 0;
@@ -246,9 +326,7 @@ public:
     uint16_t* getRegisters() { return &_registers[24]; }
     uint16_t* getSegmentRegisters() { return &_registers[0]; }
     void stubInit() { _bus.stubInit(); }
-    void setExtents(int logStartCycle, int logEndCycle, int executeEndCycle,
-        int stopIP, int stopSeg)
-    {
+    void setExtents(int logStartCycle, int logEndCycle, int executeEndCycle, int stopIP, int stopSeg) {
         _logStartCycle = logStartCycle + 4;
         _logEndCycle = logEndCycle;
         _executeEndCycle = executeEndCycle;
@@ -258,8 +336,8 @@ public:
     void setInitialIP(int v) { ip() = v; }
     int cycle() const { return _cycle - 11; }
     std::string log() const { return _log; }
-    void reset()
-    {
+
+    void reset() {
         _bus.reset();
 
         for (int i = 0; i < 0x20; ++i)
@@ -298,19 +376,19 @@ public:
         //_cyclesUntilCanLowerQueueFilled = 0;
         _locking = false;
     }
-    void run_for(int cycleCt) {
+    void run_for(const int cycleCt) {
         for (int i = 0 ; i < cycleCt; i++) {
             simulateCycle();
         }
     }
-    void run()
-    {
+    void run() {
         do {
             simulateCycle();
-        } while ((getRealIP() != _stopIP + 2 || cs() != _stopSeg) &&
-            _cycle < _executeEndCycle);
+        } while ((getRealIP() != _stopIP + 2 || cs() != _stopSeg) && _cycle < _executeEndCycle);
     }
-    void setConsoleLogging() { _consoleLogging = true; }
+    void setConsoleLogging() {
+        _consoleLogging = true;
+    }
 private:
     uint16_t getRealIP() { return ip() - _queueBytes; }
     enum IOType
@@ -331,8 +409,8 @@ private:
         _snifferDecoder.queueOperation(3);
         return uint8_t;
     }
-    int modRMReg() { return (_modRM >> 3) & 7; }
-    int modRMReg2() { return _modRM & 7; }
+    [[nodiscard]] int modRMReg() const { return (_modRM >> 3) & 7; }
+    [[nodiscard]] int modRMReg2() const { return _modRM & 7; }
     uint16_t& rw(int r) { return _registers[24 + r]; }
     uint16_t& rw() { return rw(_opcode & 7); }
     uint16_t& ax() { return rw(0); }
@@ -1238,12 +1316,13 @@ private:
             _snifferDecoder.setIRQs(_bus.getIRQLines());
             _snifferDecoder.setINT(_bus.interruptPending());
             _snifferDecoder.setCGA(_bus.getCGA());
+
             std::string l = _bus.snifferExtra() + _snifferDecoder.getLine();
-            l = pad(l, 103) + microcodeString() + "\n";
+            l = pad(l, 103) + microcodeString();
             if (_cycle >= _logStartCycle) {
                 if (_consoleLogging)
-                    //std::cout << l << std::endl;
-                    SDL_Log("%s", l.c_str());
+                    std::cout << l << std::endl;
+                    //SDL_Log("%s\n", l.c_str());
                 else
                     _log += l;
             }
@@ -1253,11 +1332,14 @@ private:
         _interruptPending = _bus.interruptPending();
         _bus.wait();
     }
-    std::string pad(const std::string& s, int n) {  return s + std::string(std::max(0, n - static_cast<int>(s.length())), ' '); }
+    static std::string pad(const std::string& s, int n) {  return s + std::string(std::max(0, n - static_cast<int>(s.length())), ' '); }
+
     std::string microcodeString()
     {
-        if (_lastMicrocodePointer == -1)
+        if (_lastMicrocodePointer == -1) {
             return "";
+        }
+
         static const char* regNames[] = {
             "RA",  // ES
             "RC",  // CS
@@ -1332,6 +1414,8 @@ private:
             "PREIDIV ", // abs tmpa:tmpc and tmpb, invert F1 if one or the other but not both were negative
             "POSTIDIV", // negate ~tmpc if F1 set
         };
+
+        int mcLineNumber = _lastMicrocodePointer >> 2;
         uint8_t* m = &_microcode[
             ((_microcodeIndex[_lastMicrocodePointer >> 2] << 2) +
                 (_lastMicrocodePointer & 3)) << 2];
@@ -1340,7 +1424,10 @@ private:
         int t = m[2] & 7;
         bool f = ((m[2] & 8) != 0);
         int o = m[3];
+
         std::string r;
+        r += std::format("{:03X}: ", mcLineNumber);
+
         if (d == 0 && s == 0 && t == 0 && !f && o == 0) {
             r += "null instruction executed!";
             s = 0x15;
@@ -1349,7 +1436,7 @@ private:
             o = 0xfe;
         }
         if (s == 0x15 && d == 0x07)  // "ONES  -> Q" used as no-op move
-            r = "                ";
+            r += "                ";
         else {
             const char* source = regNames[s];
             switch (s) {
@@ -1358,8 +1445,9 @@ private:
                 case 0x15: source = "ONES"; break;
                 case 0x16: source = "CR"; break;  // low 3 bits of microcode address Counting Register + 1? Used as interrupt number at 0x198 (1), 0x199 (2), 0x1a7 (0), 0x1af (4), and 0x1b2 (3)
                 case 0x17: source = "ZERO"; break;
+                default: break;
             }
-            r = pad(std::string(source), 5) + " -> " + pad(std::string(regNames[d]), 7);
+            r += pad(std::string(source), 5) + " -> " + pad(std::string(regNames[d]), 7);
         }
         r += "   ";
         if ((o & 0x7f) == 0x7f) {
@@ -1395,6 +1483,7 @@ private:
                     case 0x07: r += "SCOF "; break;  // set carry and overflow
                     case 0x08: r += "WAIT "; break;  // not sure what this does
                     case 0x0f: r += "none "; break;
+                    default: break;
                 }
                 r += " ";
                 switch (o & 7) {
@@ -1405,6 +1494,7 @@ private:
                     case 4: r += "RTN     "; break;
                     case 5: r += "NX      "; break;
                     case 7: r += "none    "; break;
+                    default: break;
                 }
                 break;
             case 1:
@@ -1423,6 +1513,7 @@ private:
                     case 0x1b: r += "NEG "; break;
                     case 0x1c: r += "INC2"; break;
                     case 0x1d: r += "DEC2"; break;
+                    default: break;
                 }
                 r += "  ";
                 switch (o & 7) {
@@ -1431,6 +1522,7 @@ private:
                     case 2: r += "tmpb    "; break;
                     case 3: r += "tmpb, NX"; break;
                     case 4: r += "tmpc    "; break;
+                    default: break;
                 }
                 break;
             case 6:
@@ -1439,6 +1531,7 @@ private:
                     case 2: r += "IRQ  "; break;
                     case 4: r += "w    "; break;
                     case 5: r += "W,RNI"; break;
+                    default: break;
                 }
                 r += " ";
                 switch ((o >> 2) & 3) {  // Bits 0 and 1 are segment
@@ -1446,15 +1539,18 @@ private:
                     case 1: r += "D0,"; break;  // segment 0
                     case 2: r += "DS,"; break;  // SS
                     case 3: r += "DD,"; break;  // DS
+                    default: break;
                 }
                 switch (o & 3) {  // bits 2 and 3 are IND update
                     case 0: r += "P2"; break;  // Increment IND by 2
                     case 1: r += "BL"; break;  // Adjust IND according to word size and DF
                     case 2: r += "M2"; break;  // Decrement IND by 2
                     case 3: r += "P0"; break;  // Don't adjust IND
+                    default: break;
                 }
                 r += "   ";
                 break;
+            default: break;
         }
         r += " ";
         if (f)
@@ -1471,8 +1567,10 @@ private:
                 r += ".";
         }
         _lastMicrocodePointer = -1;
+
         return r;
     }
+
     bool condition(int n)
     {
         switch (n) {
@@ -1513,8 +1611,10 @@ private:
                 return _f1;
             case 0x0e: // INT
                 return interruptPending();
+            default:
+                break;
         }
-        bool jump; // XC
+        bool jump = false; // XC
         switch (_opcode & 0x0e) {
             case 0x00: jump = of(); break;  // O
             case 0x02: jump = cf(); break;  // C
@@ -1524,11 +1624,14 @@ private:
             case 0x0a: jump = pf(); break;  // P
             case 0x0c: jump = (sf() != of()); break;  // L
             case 0x0e: jump = (sf() != of()) || zf(); break;  // LE
+            default: break;
         }
-        if (lowBit(_opcode))
+        if (lowBit(_opcode)) {
             jump = !jump;
+        }
         return jump;
     }
+
     bool interruptPending()
     {
         return _nmiRequested || (intf() && _interruptPending);

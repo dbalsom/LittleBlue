@@ -1,5 +1,4 @@
-#ifndef MACHINE_H
-#define MACHINE_H
+#pragma once
 
 #include <cstdio>
 
@@ -7,8 +6,7 @@
 
 class Machine {
 
-private:
-    Cpu _cpu{};
+Cpu _cpu{};
 
 public:
     Machine() {
@@ -23,16 +21,14 @@ public:
             0,
             0
             );
-        printf("initialized and reset cpu.\n");
+        printf("Initialized and reset cpu!\n");
     }
+
     void run_for(int ticks) {
         _cpu.run_for(ticks / 3);
     }
+
     void reset() {
         _cpu.reset();
     }
 };
-
-
-
-#endif //MACHINE_H

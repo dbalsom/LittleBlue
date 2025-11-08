@@ -78,8 +78,12 @@ public:
                                 c = (c & 0xcf) + (_cLines & 0x30);
                         }
                     }
-                    if (bMode() == 0 && cLowerInput())
+                    if (bMode() == 0 && cLowerInput()) {
                         c = (c & 0xf0) + (_cLines & 0x0f);
+                    }
+
+                    c &= 0x3F; // Clear parity bits
+                    std::cout << "PPI read port C: " << std::hex << static_cast<int>(c) << std::dec << "\n";
                     return c;
                 }
         }

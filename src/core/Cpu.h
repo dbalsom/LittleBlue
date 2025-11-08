@@ -6,6 +6,7 @@
 #include <string>
 #include <format>
 #include <SDL3/SDL_log.h>
+#include <deque>
 
 #include "../littleblue.h"
 #include "Bus.h"
@@ -45,15 +46,24 @@ class Cpu
         groupLoadSegmentRegister        = 0x1000000,
     };
 public:
+
+    enum class RunResult { Ok, Halt, BreakpointHit };
+
     Cpu() : _consoleLogging(false), _bus()
     {
         _logStartCycle = 0;
         _logEndCycle = 100;
+
+        // Initialize _byteRegisters as byte pointers into _registers.
+        // Endianness is checked by setting a known value and examining the first byte.
+        // This is clever, but it makes Cpu not object-safe for assignment/relocation.
         _registers[24] = 0x100;
         auto byteData = reinterpret_cast<uint8_t*>(&_registers[24]);
         int bigEndian = *byteData;
-        int byteNumbers[8] = {0, 2, 4, 6, 1, 3, 5, 7};
         for (int i = 0 ; i < 8; ++i) {
+            int byteNumbers[8] = {0, 2, 4, 6, 1, 3, 5, 7};
+            // The index will be XOR'd with either 0 (little-endian) or 1 (big-endian) to flip the byte order
+            // if required.
             _byteRegisters[i] = &byteData[byteNumbers[i] ^ bigEndian];
         }
         _registers[21] = 0xffff;
@@ -65,11 +75,10 @@ public:
         // software emulation.
         static const bool use8086 = false;
 
-        // Microcode has 512 instruction words.
+        // Initialize an array to hold the 512 21-bit microcode instruction words.
         uint32_t instructions[512];
-        // Initialize all instructions to 0 prior to decoding.
-        for (int i = 0; i < 512; ++i) {
-            instructions[i] = 0;
+        for (unsigned int & instruction : instructions) {
+            instruction = 0;
         }
 
         // Load the main microcode ROM
@@ -107,8 +116,7 @@ public:
             std::cout << std::format("{:03X}: {:021b}\n", i, static_cast<unsigned int>(d));
 
             int s = ((d >> 13) & 1) + ((d >> 10) & 6) + ((d >> 11) & 0x18);
-            int dd = ((d >> 20) & 1) + ((d >> 18) & 2) + ((d >> 16) & 4) +
-                ((d >> 14) & 8) + ((d >> 12) & 0x10);
+            int dd = ((d >> 20) & 1) + ((d >> 18) & 2) + ((d >> 16) & 4) + ((d >> 14) & 8) + ((d >> 12) & 0x10);
             int typ = (d >> 7) & 7;
             if ((typ & 4) == 0)
                 typ >>= 1;
@@ -322,6 +330,7 @@ public:
         _microcodePointer = 0;
         _microcodeReturn = 0;
     }
+    Bus *getBus() { return &_bus; }
     uint8_t* getRAM() { return _bus.ram(); }
     uint16_t* getRegisters() { return &_registers[24]; }
     uint16_t* getSegmentRegisters() { return &_registers[0]; }
@@ -334,16 +343,24 @@ public:
         _stopSeg = stopSeg;
     }
     void setInitialIP(int v) { ip() = v; }
-    int cycle() const { return _cycle - 11; }
-    std::string log() const { return _log; }
+    [[nodiscard]] uint64_t cycle() const { return _cycle >= 11 ? _cycle - 11 : 0; }
+    [[nodiscard]] std::string log() const {
+        // Assemble buffered lines into a single string on request
+        std::string out;
+        for (const auto &s : _logBuffer) {
+            out += s;
+        }
+        return out;
+     }
 
     void reset() {
         _bus.reset();
 
-        for (int i = 0; i < 0x20; ++i)
-            _registers[i] = 0;
-        _registers[1] = 0xffff;  // RC (CS)
-        _registers[21] = 0xffff; // ONES
+        for (unsigned short & _register : _registers) {
+            _register = 0;
+        }
+        _registers[1] = 0xFFFF;  // RC (CS)
+        _registers[21] = 0xFFFF; // ONES
         _registers[15] = 2; // FLAGS
 
         _cycle = 0;
@@ -352,7 +369,7 @@ public:
         _ioType = ioPassive;
         _snifferDecoder.reset();
         _prefetching = true;
-        _log = "";
+        _logBuffer.clear();
         ip() = 0;
         _nmiRequested = false;
         _queueBytes = 0;
@@ -375,12 +392,36 @@ public:
         _ready = true;
         //_cyclesUntilCanLowerQueueFilled = 0;
         _locking = false;
+        _breakpointHit = false;
     }
-    void run_for(const int cycleCt) {
+
+    RunResult run_for(const int cycleCt) {
+
+        sanity_check();
+        // Clear the breakpoint status if we're being asked to run again
+        _breakpointHit = false;
+
         for (int i = 0 ; i < cycleCt; i++) {
             simulateCycle();
+
+            // If we've reached an instruction boundary this cycle, check the breakpoint
+            if (_rni && _hasBreakpoint) {
+                uint16_t realIP = getRealIP();
+                if (cs() == _breakpoint_cs && realIP == _breakpoint_ip) {
+                    _breakpointHit = true;
+                    return RunResult::BreakpointHit;
+                }
+            }
+
+            if (_breakpointHit) {
+                // Stop executing further cycles if a breakpoint was hit by other means
+               return RunResult::BreakpointHit;
+            }
         }
+
+        return RunResult::Ok;
     }
+
     void run() {
         do {
             simulateCycle();
@@ -389,8 +430,47 @@ public:
     void setConsoleLogging() {
         _consoleLogging = true;
     }
-private:
+
+    // Run CPU cycles until the next instruction boundary is reached.
+    // Returns the number of CPU cycles executed.
+    int stepToNextInstruction() {
+        int cycles = 0;
+        // if _rni is true, clear it first by cycling the CPU until it becomes false.
+        while (_rni && _state != stateHalted) {
+            simulateCycle();
+        }
+        //_rni = false;
+        // Run cycles until _rni becomes true or the CPU halts.
+        while (!_rni && _state != stateHalted) {
+            simulateCycle();
+            ++cycles;
+            // Prevent infinite loop in funky situations by limiting cycles
+            if (cycles > 1000000) break;
+        }
+        return cycles;
+    }
+
+    // Backwards-compatible wrapper: some code calls getRealIP()
     uint16_t getRealIP() { return ip() - _queueBytes; }
+
+    // Breakpoint API
+    void setBreakpoint(uint16_t cs, uint16_t ip) {
+         _breakpoint_cs = cs;
+         _breakpoint_ip = ip;
+         _hasBreakpoint = true;
+         _breakpointHit = false;
+    }
+    void clearBreakpoint() {
+         _hasBreakpoint = false;
+         _breakpointHit = false;
+    }
+    bool hasBreakpoint() const { return _hasBreakpoint; }
+    bool breakpointHit() const { return _breakpointHit; }
+    uint16_t breakpointCS() const { return _breakpoint_cs; }
+    uint16_t breakpointIP() const { return _breakpoint_ip; }
+    void clearBreakpointHit() { _breakpointHit = false; }
+private:
+
     enum IOType
     {
         ioInterruptAcknowledge = 0,
@@ -402,12 +482,19 @@ private:
         ioWriteMemory = 6,
         ioPassive = 7
     };
+
+    void sanity_check() {
+        if (_byteRegisters[0] != reinterpret_cast<uint8_t*>(&_registers[24])) {
+            std::cerr << "byte register pointers invalidated!" << std::endl;
+        }
+    }
+
     uint8_t queueRead()
     {
-        uint8_t uint8_t = _queue & 0xff;
+        const uint8_t q = _queue & 0xff;
         _dequeueing = true;
         _snifferDecoder.queueOperation(3);
-        return uint8_t;
+        return q;
     }
     [[nodiscard]] int modRMReg() const { return (_modRM >> 3) & 7; }
     [[nodiscard]] int modRMReg2() const { return _modRM & 7; }
@@ -443,19 +530,23 @@ private:
     uint16_t getMemOrReg(bool mem)
     {
         if (mem) {
-            if (_useMemory)
+            if (_useMemory) {
                 return opr();
-            if (!_wordSize)
+            }
+            if (!_wordSize) {
                 return modRMRB2();
+            }
             return modRMRW2();
         }
-        if ((_group & groupNonSegregEA) == 0)
+        if ((_group & groupNonSegregEA) == 0) {
             return sr(modRMReg());
+        }
         if (!_wordSize) {
             int n = modRMReg();
             uint16_t r = rw(n & 3);
-            if ((n & 4) != 0)
+            if ((n & 4) != 0) {
                 r = (r >> 8) + (r << 8);
+            }
             return r;
         }
         return modRMRW();
@@ -463,23 +554,29 @@ private:
     void setMemOrReg(bool mem, uint16_t v)
     {
         if (mem) {
-            if (_useMemory)
+            if (_useMemory) {
                 opr() = v;
+            }
             else {
-                if (!_wordSize)
+                if (!_wordSize) {
                     modRMRB2() = static_cast<uint8_t>(v);
-                else
+                }
+                else {
                     modRMRW2() = v;
+                }
             }
         }
         else {
-            if ((_group & groupNonSegregEA) == 0)
+            if ((_group & groupNonSegregEA) == 0) {
                 sr(modRMReg()) = v;
+            }
             else {
-                if (!_wordSize)
+                if (!_wordSize) {
                     modRMRB() = static_cast<uint8_t>(v);
-                else
+                }
+                else {
                     modRMRW() = v;
+                }
             }
         }
     }
@@ -503,10 +600,12 @@ private:
         startInstruction();
         _microcodePointer = _nextMicrocodePointer;
         _wordSize = true;
-        if ((_group & groupNoWidthInOpcodeBit0) == 0 && !lowBit(_opcode))
+        if ((_group & groupNoWidthInOpcodeBit0) == 0 && !lowBit(_opcode)) {
             _wordSize = false;
-        if ((_group & groupByteOrWordAccess) == 0)
+        }
+        if ((_group & groupByteOrWordAccess) == 0) {
             _wordSize = false;  // Just for XLAT
+        }
         _carry = cf();  // Just for SALC
         _overflow = of(); // Not sure if the other flags work the same
         _parity = pf() ? 0x40 : 0;
@@ -790,15 +889,19 @@ private:
                     break;
                 }
                 if ((_group & groupEffectiveAddress) == 0) {
-                    if ((_group & groupWidthInOpcodeBit3) != 0 &&
-                        (_opcode & 8) != 0)
+                    if ((_group & groupLoadRegisterImmediate) != 0 && (_opcode & 8) == 0) {
                         rb(_opcode & 7) = v;
-                    else
+                    }
+                    else if ((_group & groupWidthInOpcodeBit3) != 0 && ((_opcode & 8) != 0)) {
+                        rb(_opcode & 7) = v;
+                    }
+                    else {
                         rw() = v;
+                    }
                 }
                 else {
                     setMemOrReg(_mIsM, v);
-                    _skipRNI = (_mIsM && _useMemory);
+                    _skipRNI = _mIsM && _useMemory;
                 }
                 break;
             case 19: // R
@@ -820,7 +923,13 @@ private:
                 tmpb() = (tmpb() & 0xff) | (v << 8);
                 break;
             default:
-                _registers[_destination] = v;
+                if (_destination < 32) {
+                    _registers[_destination] = v;
+                }
+                else {
+                    std::cerr << "Unknown destination: " << _destination << std::endl;
+                }
+
         }
     }
     void busAccessDone(uint8_t high)
@@ -1293,7 +1402,8 @@ private:
             _queueFlushing = false;
             _prefetching = true;
         }
-        if (_cycle < _logEndCycle) {
+        // If cycle logging is enabled we want to capture logs regardless of the configured end cycle.
+        if (_cycleLogging || _cycle < _logEndCycle) {
             _snifferDecoder.setAEN(_bus.getAEN());
             _snifferDecoder.setDMA(_bus.getDMA());
             _snifferDecoder.setPITBits(_bus.pitBits());
@@ -1320,11 +1430,17 @@ private:
             std::string l = _bus.snifferExtra() + _snifferDecoder.getLine();
             l = pad(l, 103) + microcodeString();
             if (_cycle >= _logStartCycle) {
-                if (_consoleLogging)
+                // Always respect console logging
+                if (_consoleLogging) {
                     std::cout << l << std::endl;
                     //SDL_Log("%s\n", l.c_str());
-                else
-                    _log += l;
+                }
+                // Also append into the ring-buffer when cycle logging is enabled
+                if (_cycleLogging) {
+                    _logBuffer.push_back(l);
+                    if (_logBuffer.size() > _logCapacity)
+                        _logBuffer.pop_front();
+                }
             }
         }
         _busState = nextState;
@@ -1699,15 +1815,32 @@ private:
     }
 
     std::string _log;
+    // Ring buffer of recent log lines for cycle logging
+    std::deque<std::string> _logBuffer;
+    size_t _logCapacity = 10000; // default capacity (lines)
+    bool _cycleLogging = false;  // enabled via GUI
     Bus _bus;
 
+public:
+    // Cycle log API
+    void setCycleLogging(bool v) { _cycleLogging = v; }
+    bool isCycleLogging() const { return _cycleLogging; }
+    void clearCycleLog() { _logBuffer.clear(); }
+    void setCycleLogCapacity(size_t c) { _logCapacity = c; while (_logBuffer.size() > _logCapacity) _logBuffer.pop_front(); }
+    const std::deque<std::string>& getCycleLogBuffer() const { return _logBuffer; }
+    size_t getCycleLogSize() const { return _logBuffer.size(); }
+    size_t getCycleLogCapacity() const { return _logCapacity; }
+    // Append a single line directly into the cycle log buffer (for diagnostics/UI)
+    void appendCycleLogLine(const std::string &line) { _logBuffer.push_back(line); if (_logBuffer.size() > _logCapacity) _logBuffer.pop_front(); }
+
+private:
     int _stopIP;
     int _stopSeg;
 
-    int _cycle;
-    int _logStartCycle;
-    int _logEndCycle;
-    int _executeEndCycle;
+    uint64_t _cycle;
+    uint64_t _logStartCycle;
+    uint64_t _logEndCycle;
+    uint64_t _executeEndCycle;
     bool _consoleLogging;
 
     bool _nmiRequested;  // Not actually set anywhere yet
@@ -1783,6 +1916,11 @@ private:
     bool _ready;
     //int _cyclesUntilCanLowerQueueFilled;
     bool _locking;
+    // Breakpoint state
+    bool _hasBreakpoint = false;
+    bool _breakpointHit = false;
+    uint16_t _breakpoint_cs;
+    uint16_t _breakpoint_ip;
 };
 
 #endif

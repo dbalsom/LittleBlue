@@ -36,7 +36,19 @@ add_executable(${EXECUTABLE_NAME}
         src/core/Ppi.h
         src/core/Disassembler.h
         src/core/Cga.cpp
-        src/core/Cga.h)
+        src/core/Cga.h
+        src/core/Crtc.cpp
+        src/core/Crtc.h
+        src/gui/imgui_memory_editor.h
+        src/gui/DebuggerManager.h
+        src/gui/DebuggerManager.cpp
+        src/gui/DisassemblyWindow.h
+        src/gui/DisassemblyWindow.cpp
+        src/gui/CpuStatusWindow.h
+        src/gui/CpuStatusWindow.cpp
+        src/gui/MemoryViewerWindow.cpp
+        src/gui/MemoryViewerWindow.h
+)
 
 target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core  ${CMAKE_SOURCE_DIR}/src/alfe)
 
@@ -44,7 +56,6 @@ target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/co
 target_sources(${EXECUTABLE_NAME} 
 PRIVATE 
     src/main.cpp
-        src/core/Machine.cpp
 )
 
 # Set C++ version
@@ -190,4 +201,3 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
     set(CPACK_GENERATOR "DragNDrop")
     include(CPack)
 endif()
-

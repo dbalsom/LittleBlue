@@ -5,17 +5,20 @@
 #include <vector>
 
 #include "bios.h"
+#include "Cga.h"
 #include "Dmac.h"
 #include "Pic.h"
 #include "Pit.h"
 #include "Ppi.h"
 
 #define ROM_BASE_ADDRESS 0xFE000
+#define CONVENTIONAL_RAM_SIZE 0xA0000
+#define CGA_ADDRESS 0xB8000
 
 class Bus
 {
 public:
-    Bus() : _ram(0xa0000), _rom(0x2000)
+    Bus() : _ram(CONVENTIONAL_RAM_SIZE), _rom(0x2000)
     {
         _rom.assign(U18, U18 + sizeof(U18));
         _pit.setGate(0, true);
@@ -23,8 +26,35 @@ public:
         _pit.setGate(2, true);
     }
     uint8_t* ram() { return &_ram[0]; }
-    void reset()
-    {
+    [[nodiscard]] size_t ramSize() const { return _ram.size(); }
+
+    // Expose CGA instance for tools/UI that need direct access to video memory
+    CGA* cga() { return &_cga; }
+
+    // Read a byte from a physical address without changing bus state.
+    // This allows tools (disassembler/UI) to inspect memory (RAM or ROM) directly.
+    uint8_t peek(uint32_t address) const {
+        // Real-mode uses 20-bit physical addressing; mask to 20 bits in callers if needed.
+        if (address >= ROM_BASE_ADDRESS) {
+            uint32_t romIndex = address - ROM_BASE_ADDRESS;
+            if (romIndex < _rom.size())
+                return _rom[romIndex];
+            return 0xff;
+        }
+        if (address >= CGA_ADDRESS && address < CGA_ADDRESS + 0x4000) {
+            return _cga.readMem(address - CGA_ADDRESS);
+        }
+        if (address >= CONVENTIONAL_RAM_SIZE) {
+            return 0xff; // open bus / video area not resident here
+        }
+        if (address < _ram.size())
+            return _ram[address];
+        return 0xff;
+    }
+
+    [[nodiscard]] size_t romSize() const { return _rom.size(); }
+
+    void reset() {
         _dmac.reset();
         _pic.reset();
         _pit.reset();
@@ -43,21 +73,20 @@ public:
         _lastNonDMAReady = true;
         _cgaPhase = 0;
     }
-    void stubInit()
-    {
+
+    void stubInit() {
         _pic.stubInit();
         _pit.stubInit();
         _pitPhase = 2;
         _lastCounter0Output = true;
     }
-    void startAccess(uint32_t address, int type)
-    {
+    void startAccess(uint32_t address, int type) {
         _address = address;
         _type = type;
         _cycle = 0;
     }
-    void wait()
-    {
+    void wait() {
+        _cga.wait();
         _cgaPhase = (_cgaPhase + 3) & 0x0f;
         ++_pitPhase;
         if (_pitPhase == 4) {
@@ -146,9 +175,11 @@ public:
     {
         return dmaReady() && nonDMAReady();
     }
+
     void write(uint8_t data)
     {
         if (_type == 2) {
+            // IO write
             switch (_address & 0x3e0) {
                 case 0x00:
                     _dmac.write(_address & 0x0f, data);
@@ -169,12 +200,21 @@ public:
                 case 0xa0:
                     _nmiEnabled = (data & 0x80) != 0;
                     break;
+                default:
+                    break;
             }
         }
-        else
-            if (_address < 0xa0000)
+        else {
+            // Memory write
+            if (_address < CONVENTIONAL_RAM_SIZE) {
                 _ram[_address] = data;
+            }
+            else if (_address >= CGA_ADDRESS && _address < CGA_ADDRESS + 0x4000) {
+                _cga.writeMem(_address - CGA_ADDRESS, data);
+            }
+        }
     }
+
     uint8_t read()
     {
         if (_type == 0) {
@@ -182,42 +222,52 @@ public:
             return _pic.interruptAcknowledge();
         }
         if (_type == 1) {
+            // IO read
+            std::cout << "IO read from port " << std::hex << _address << std::dec << "\n" << std::flush;
             // Read from IO port
             switch (_address & 0x3e0) {
                 case 0x00: return _dmac.read(_address & 0x0f);
                 case 0x20: return _pic.read(_address & 1);
-                case 0x40: return _pit.read(_address & 3);
+                case 0x40:
+                    {
+                        uint8_t b = _pit.read(_address & 3);
+                        std::cout << "PIT read from port " << std::hex << (_address & 3)
+                                  << ": " << std::hex << static_cast<int>(b) << std::dec << "\n";
+                        return b;
+                    }
                 case 0x60:
                     {
+                        std::cout << "PPI read from port " << std::hex << (_address & 3) << std::dec << "\n";
                         uint8_t b = _ppi.read(_address & 3);
                         updatePPI();
                         return b;
                     }
-
+                default:
+                    return 0xFF;
             }
-            // Default: return open bus.
-            return 0xff;
+        }
+
+        if (_address < CONVENTIONAL_RAM_SIZE) {
+            return _ram[_address];
         }
         if (_address >= ROM_BASE_ADDRESS) {
             // Read from ROM.
             return _rom[_address - ROM_BASE_ADDRESS];
         }
-        if (_address >= 0xa0000) {
-            // Return open bus.
-            return 0xff;
+        if (_address >= CGA_ADDRESS && _address < CGA_ADDRESS + 0x4000) {
+            return _cga.readMem(_address - CGA_ADDRESS);
         }
-        // Default state: return RAM contents.
-        return _ram[_address];
+        // No match? Return open bus.
+        return 0xFF;
     }
-    bool interruptPending() { return _pic.interruptPending(); }
+    bool interruptPending() const { return _pic.interruptPending(); }
     int pitBits()
     {
         return (_pitPhase == 1 || _pitPhase == 2 ? 1 : 0) +
             (_counter2Gate ? 2 : 0) + (_pit.getOutput(2) ? 4 : 0);
     }
     void setPassiveOrHalt(bool v) { _passiveOrHalt = v; }
-    bool getAEN()
-    {
+    [[nodiscard]] bool getAEN() const {
         return _dmaState == sAEN || _dmaState == s0 || _dmaState == s1 ||
             _dmaState == s2 || _dmaState == s3 || _dmaState == sWait ||
             _dmaState == s4;
@@ -230,13 +280,13 @@ public:
     {
         return ""; //hex(_pit.getMode(1), 4, false) + " ";
     }
-    int getBusOperation()
-    {
+
+    [[nodiscard]] int getBusOperation() const {
         switch (_dmaState) {
             case s2: return 5;  // memr
             case s3: return 2;  // iow
+            default: return 0;
         }
-        return 0;
     }
     bool getDMAS3() { return _dmaState == s3; }
     bool getDMADelayedT2() { return _dmaState == sDelayedT2; }
@@ -335,6 +385,7 @@ private:
     PIC _pic;
     PIT _pit;
     PPI _ppi;
+    CGA _cga;
     int _pitPhase;
     bool _lastCounter0Output;
     bool _lastCounter1Output;
@@ -359,3 +410,4 @@ private:
 };
 
 #endif
+

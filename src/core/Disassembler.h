@@ -1,6 +1,8 @@
-#ifndef DISASSEMBLER_H
-#define DISASSEMBLER_H
+#pragma once
+
+#include <cstdint>
 #include <string>
+#include <format>
 
 class Disassembler
 {
@@ -325,14 +327,12 @@ private:
     }
     std::string port() { return ((op1() & 1) == 0 ? ib() : wordRegs(2)); }
 
-    uint16_t _ip;
-    uint8_t _code[6];
-    int _byteCount;
-    bool _wordSize;
-    bool _doubleWord;
-    int _offset;
-    int _lastOffset;
+    uint16_t _ip{};
+    uint8_t _code[6]{};
+    int _byteCount{};
+    bool _wordSize{};
+    bool _doubleWord{};
+    int _offset{};
+    int _lastOffset{};
 };
 
-
-#endif //DISASSEMBLER_H

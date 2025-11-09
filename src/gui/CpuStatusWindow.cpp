@@ -200,6 +200,14 @@ void CpuStatusWindow::show(bool *open) {
             }
 
             ImGui::Separator();
+            ImGui::Columns(1, nullptr, false);
+            ImGui::Text("Queue: %s", _machine->getQueueString().c_str());
+
+            ImGui::Separator();
+            ImGui::Columns(1, nullptr, false);
+            ImGui::Text("ALU: %0X", _machine->getALU());
+
+            ImGui::Separator();
             // Breakpoint controls (code breakpoint in form XXXX:XXXX)
             static char bp_input[16] = "";
             // Persisted parse-error marker set when Set Breakpoint fails

@@ -16,6 +16,45 @@
 
 #define LINE_ENDING_SIZE 1
 
+enum class Register : size_t {
+    ES,
+    CS,
+    SS,
+    DS,
+    PC,
+    IND,
+    OPR,
+    R7,
+    R8,
+    R9,
+    R10,
+    R11,
+    TMPA,
+    TMPB,
+    R14,
+    FLAGS,
+    R16,
+    R17,
+    M,
+    R,
+    SIGMA,
+    ONES,
+    R22,
+    R23,
+    AX,
+    CX,
+    DX,
+    BX,
+    SP,
+    BP,
+    SI,
+    DI,
+};
+
+constexpr size_t reg_to_idx(Register r) {
+    return static_cast<size_t>(r);
+}
+
 class Cpu
 {
     enum {
@@ -332,8 +371,8 @@ public:
     }
     Bus *getBus() { return &_bus; }
     uint8_t* getRAM() { return _bus.ram(); }
-    uint16_t* getRegisters() { return &_registers[24]; }
-    uint16_t* getSegmentRegisters() { return &_registers[0]; }
+    uint16_t* getMainRegisters() { return &_registers[24]; }
+    uint16_t* getRegisters() { return &_registers[0]; }
     void stubInit() { _bus.stubInit(); }
     void setExtents(int logStartCycle, int logEndCycle, int executeEndCycle, int stopIP, int stopSeg) {
         _logStartCycle = logStartCycle + 4;

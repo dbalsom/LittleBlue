@@ -11,7 +11,7 @@ void DisassemblyWindow::show(bool *open) {
     }
 
     ImGui::Begin("Disassembly", open);
-    const uint16_t* s_regs = _machine->segmentRegisters();
+    const uint16_t* s_regs = _machine->registers();
     if (!s_regs) {
         ImGui::Text("Disassembly unavailable");
         ImGui::End();

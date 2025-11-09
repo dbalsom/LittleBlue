@@ -17,6 +17,7 @@
 #include "gui/DisassemblyWindow.h"
 #include "gui/MemoryViewerWindow.h"
 #include "gui/CycleLogWindow.h"
+#include "gui/StackViewerWindow.h"
 
 #include "littleblue.h"
 #include "core/Machine.h"
@@ -53,6 +54,7 @@ struct AppContext {
     MemoryEditor memEditor;
     bool showMemoryViewer{false};
     bool showVramViewer{false};
+    bool showStackViewer{false};
     bool showCpuViewer{false};
     bool cpuRunning{true};
     bool showDisassembly{false};
@@ -189,6 +191,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     ctx->dbgManager.addWindow("Memory Viewer", std::make_unique<MemoryViewerWindow>(machine), &ctx->showMemoryViewer);
     // Register a unified MemoryViewerWindow for VRAM (constructed with Machine* and vram=true)
     ctx->dbgManager.addWindow("VRAM Viewer", std::make_unique<MemoryViewerWindow>(machine, true), &ctx->showVramViewer);
+    // Register Stack Viewer window
+    ctx->dbgManager.addWindow("Stack Viewer", std::make_unique<StackViewerWindow>(machine), &ctx->showStackViewer);
     // Register Cycle Log window
     ctx->dbgManager.addWindow("Cycle Log", std::make_unique<CycleLogWindow>(machine), &ctx->showCycleLog);
     *appstate = ctx;

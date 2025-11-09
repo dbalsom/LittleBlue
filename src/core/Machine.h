@@ -3,12 +3,11 @@
 #include <string>
 #include "Cpu.h"
 
+enum class MachineState { Running, Stopped, BreakpointHit };
+
 class Machine {
 
 public:
-    enum class MachineState { Running, Stopped, BreakpointHit };
-
-
     Machine() {
         //_cpu.setConsoleLogging();
         _cpu.reset();
@@ -64,8 +63,8 @@ public:
     [[nodiscard]] size_t romSize() { return _cpu.getBus()->romSize(); }
 
     // Expose CPU register arrays for GUI inspection
+    uint16_t* getMainRegisters() { return _cpu.getMainRegisters(); }
     uint16_t* registers() { return _cpu.getRegisters(); }
-    uint16_t* segmentRegisters() { return _cpu.getSegmentRegisters(); }
     uint16_t getRealIP() { return _cpu.getRealIP(); }
 
     // Breakpoint control: forward to CPU

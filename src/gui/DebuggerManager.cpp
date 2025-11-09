@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <ranges>
 #include <imgui/imgui.h>
+#include <vector>
 
 void DebuggerManager::addWindow(const std::string &name, std::unique_ptr<DebuggerWindow> w, bool *open) {
     Entry e;
@@ -37,13 +38,22 @@ bool DebuggerManager::toggleVisible(const std::string &name) {
 
 void DebuggerManager::drawMenuItems() {
     // Menu items should be drawn within an ImGui menu.
-    for (auto & [fst, snd] : _windows) {
-        bool v = snd.externalOpen ? *snd.externalOpen : snd.visible;
-        if (ImGui::MenuItem(fst.c_str(), nullptr, &v)) {
-            if (snd.externalOpen)
-                *snd.externalOpen = v;
+    // Collect keys and sort them so menu appears in alphabetical order.
+    std::vector<std::string> names;
+    names.reserve(_windows.size());
+    for (auto &p : _windows) names.push_back(p.first);
+    std::ranges::sort(names);
+
+    for (const auto &name : names) {
+        const auto it = _windows.find(name);
+        if (it == _windows.end()) continue; // should not happen
+        auto &entry = it->second;
+        bool v = entry.externalOpen ? *entry.externalOpen : entry.visible;
+        if (ImGui::MenuItem(name.c_str(), nullptr, &v)) {
+            if (entry.externalOpen)
+                *entry.externalOpen = v;
             else
-                snd.visible = v;
+                entry.visible = v;
         }
     }
 }

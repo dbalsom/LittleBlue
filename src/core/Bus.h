@@ -12,7 +12,7 @@
 #include "Ppi.h"
 
 #define ROM_BASE_ADDRESS 0xFE000
-#define CONVENTIONAL_RAM_SIZE 0xA0000
+#define CONVENTIONAL_RAM_SIZE 0xB8000
 #define CGA_ADDRESS 0xB8000
 
 class Bus
@@ -85,8 +85,8 @@ public:
         _type = type;
         _cycle = 0;
     }
-    void wait() {
-        _cga.wait();
+    void tick() {
+        _cga.tick();
         _cgaPhase = (_cgaPhase + 3) & 0x0f;
         ++_pitPhase;
         if (_pitPhase == 4) {

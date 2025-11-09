@@ -23,7 +23,9 @@ public:
         _bus_tc = false;     // Used for DMA, NYI
         _cga = 0;
 
+        // T-Cycle
         _t = 0;
+        // Next T-Cycle
         _tNext = 0;
         _d = -1;
         _queueLength = 0;
@@ -169,23 +171,41 @@ public:
 
         line += " ";
 
+        // Emit queue contents.
+        line += "[";
+        for (int i = 0; i < 4; ++i) {
+            if (i < _queueLength) {
+                line += hex(_queue[i], 2, false);
+            }
+            else {
+                line += "  ";
+            }
+        }
+        line += "] ";
+
         // Emit instruction if applicable
         std::string instruction;
         if (_cpu_qs != 0) {
-            if (_cpu_qs == 2)
+            if (_cpu_qs == 2) {
+                // Queue flushed, reset queueLength.
                 _queueLength = 0;
+            }
             else {
+                // First or subsequent byte fetched from queue.
                 uint8_t b = _queue[0];
-                for (int i = 0; i < 3; ++i)
+                for (int i = 0; i < 3; ++i) {
                     _queue[i] = _queue[i + 1];
+                }
                 --_queueLength;
                 if (_queueLength < 0) {
+                    // Queue underrun, shouldn't happen
                     line += "!g";
                     _queueLength = 0;
                 }
                 instruction = _disassembler.disassemble(b, _cpu_qs == 1);
             }
         }
+
         if (_tNext == 4 || _d == 4) {
             if (_tNext == 4 && _d == 4)
                 line += "!e";
@@ -326,12 +346,12 @@ private:
 
     // Internal variables that we use to keep track of what's going on in order
     // to be able to print useful logs.
-    int _t;  // 0 = Tidle, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = Tw
-    int _tNext;
-    int _d;  // -1 = SI, 0 = S0, 1 = S1, 2 = S2, 3 = S3, 4 = S4, 5 = SW
+    int _t{0};  // 0 = Tidle, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = Tw
+    int _tNext{0};
+    int _d{-1};  // -1 = SI, 0 = S0, 1 = S1, 2 = S2, 3 = S3, 4 = S4, 5 = SW
     uint8_t _queue[4];
-    int _queueLength;
-    int _lastS;
+    int _queueLength{0};
+    int _lastS{0};
 
     // These represent the CPU and ISA bus pins used to create the sniffer
     // logs.
@@ -353,35 +373,35 @@ private:
     uint8_t _cpu_status = 7;
     uint8_t _cpu_last_status = 7; // The last CPU status. We can derive ALE from the change from 7 (PASV) to any other status.
 
-    bool _cpu_rqgt0;    // -RQ/-GT0 !87 IO REQUEST/GRANT: pins are used by other local bus masters to force the processor to release the local bus at the end of the processor's current bus cycle. Each pin is bidirectional with RQ/GT0 having higher priority than RQ/GT1. RQ/GT has an internal pull-up resistor, so may be left unconnected.
-    bool _cpu_ready;    // READY        I  READY: is the acknowledgement from the addressed memory or I/O device that it will complete the data transfer. The RDY signal from memory or I/O is synchronized by the 8284 clock generator to form READY. This signal is active HIGH. The 8088 READY input is not synchronized. Correct operation is not guaranteed if the set up and hold times are not met.
-    bool _cpu_test;     // -TEST        I  TEST: input is examined by the ``wait for test'' instruction. If the TEST input is LOW, execution continues, otherwise the processor waits in an ``idle'' state. This input is synchronized internally during each clock cycle on the leading edge of CLK.
-    bool _cpu_lock;     // -LOCK    !87  O LOCK: indicates that other system bus masters are not to gain control of the system bus while LOCK is active (LOW). The LOCK signal is activated by the ``LOCK'' prefix instruction and remains active until the completion of the next instruction. This signal is active LOW, and floats to 3-state off in ``hold acknowledge''.
+    bool _cpu_rqgt0{false};    // -RQ/-GT0 !87 IO REQUEST/GRANT: pins are used by other local bus masters to force the processor to release the local bus at the end of the processor's current bus cycle. Each pin is bidirectional with RQ/GT0 having higher priority than RQ/GT1. RQ/GT has an internal pull-up resistor, so may be left unconnected.
+    bool _cpu_ready{false};    // READY        I  READY: is the acknowledgement from the addressed memory or I/O device that it will complete the data transfer. The RDY signal from memory or I/O is synchronized by the 8284 clock generator to form READY. This signal is active HIGH. The 8088 READY input is not synchronized. Correct operation is not guaranteed if the set up and hold times are not met.
+    bool _cpu_test{false};     // -TEST        I  TEST: input is examined by the ``wait for test'' instruction. If the TEST input is LOW, execution continues, otherwise the processor waits in an ``idle'' state. This input is synchronized internally during each clock cycle on the leading edge of CLK.
+    bool _cpu_lock{false};     // -LOCK    !87  O LOCK: indicates that other system bus masters are not to gain control of the system bus while LOCK is active (LOW). The LOCK signal is activated by the ``LOCK'' prefix instruction and remains active until the completion of the next instruction. This signal is active LOW, and floats to 3-state off in ``hold acknowledge''.
     // +A19..+A0      O Address bits: These lines are used to address memory and I/O devices within the system. These lines are generated by either the processor or DMA controller.
-    uint32_t _bus_address;
+    uint32_t _bus_address{0};
     // +D7..+D0      IO Data bits: These lines provide data bus bits 0 to 7 for the processor, memory, and I/O devices.
-    uint8_t _bus_data;
+    uint8_t _bus_data{0};
     // +DRQ0 JP6/1 == U28.19 == U73.9
-    uint8_t _bus_dma;
+    uint8_t _bus_dma{0};
 
     // +DRQ1..+DRQ3  I  DMA Request: These lines are asynchronous channel requests used by peripheral devices to gain DMA service. They are prioritized with DRQ3 being the lowest and DRQl being the highest. A request is generated by bringing a DRQ line to an active level (high). A DRQ line must be held high until the corresponding DACK line goes active.
     // -DACK0..-DACK3 O -DMA Acknowledge: These lines are used to acknowledge DMA requests (DRQ1-DRQ3) and to refresh system dynamic memory (DACK0). They are active low.
-    uint8_t _dmas;        // JP9/4 HRQ DMA (bit 0), JP4/1 HOLDA (bit 1)
+    uint8_t _dmas{0};        // JP9/4 HRQ DMA (bit 0), JP4/1 HOLDA (bit 1)
     // +IRQ0..+IRQ7  I  Interrupt Request lines: These lines are used to signal the processor that an I/O device requires attention. An Interrupt Request is generated by raising an IRQ line (low to high) and holding it high until it is acknowledged by the processor (interrupt service routine).
-    uint8_t _bus_irq = 0;
-    bool _int = false;  // JP9/1 INT
-    uint8_t _cga;         // JP7/2  CGA HCLK (bit 0), JP7/1  CGA LCLK (bit 1)
-    uint8_t _bus_pit;     // clock, gate, output
-    bool _bus_ale = false; // ALE       Address Latch Enable
-    bool _bus_ior;      // -IOR         O -I/O Read Command: This command line instructs an I/O device to drive its data onto the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
-    bool _bus_iow;      // -IOW         O -I/O Write Command: This command line instructs an I/O device to read the data on the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
-    bool _bus_memr;     // -MEMR        O Memory Read Command: This command line instructs the memory to drive its data onto the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
-    bool _bus_memw;     // -MEMW        O Memory Write Command: This command line instructs the memory to store the data present on the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
-    bool _bus_iochrdy;  // +I/O CH RDY  I I/O Channel Ready: This line, normally high (ready), is pulled low (not ready) by a memory or I/O device to lengthen I/O or memory cycles. It allows slower devices to attach to the I/O channel with a minimum of difficulty. Any slow device using this line should drive it low immediately upon detecting a valid address and a read or write command. This line should never be held low longer than 10 clock cycles. Machine cycles (I/O or memory) are extended by an integral number of CLK cycles (210 ns).
-    bool _bus_aen;      // +AEN         O Address Enable: This line is used to de-gate the processor and other devices from the I/O channel to allow DMA transfers to take place. When this line is active (high), the DMA controller has control of the address bus, data bus, read command lines (memory and I/O), and the write command lines (memory and I/O).
-    bool _bus_tc;       // +T/C         O Terminal Count: This line provides a pulse when the terminal count for any DMA channel is reached. This signal is active high.
-    bool _cpuDataFloating;
-    bool _isaDataFloating;
+    uint8_t _bus_irq{0};
+    bool _int{false};  // JP9/1 INT
+    uint8_t _cga{0};         // JP7/2  CGA HCLK (bit 0), JP7/1  CGA LCLK (bit 1)
+    uint8_t _bus_pit{0};     // clock, gate, output
+    bool _bus_ale{false}; // ALE       Address Latch Enable
+    bool _bus_ior{true};  // -IOR         O -I/O Read Command: This command line instructs an I/O device to drive its data onto the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
+    bool _bus_iow{true};      // -IOW         O -I/O Write Command: This command line instructs an I/O device to read the data on the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
+    bool _bus_memr{true};     // -MEMR        O Memory Read Command: This command line instructs the memory to drive its data onto the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
+    bool _bus_memw{true};     // -MEMW        O Memory Write Command: This command line instructs the memory to store the data present on the data bus. It may be driven by the processor or the DMA controller. This signal is active low.
+    bool _bus_iochrdy{false};  // +I/O CH RDY  I I/O Channel Ready: This line, normally high (ready), is pulled low (not ready) by a memory or I/O device to lengthen I/O or memory cycles. It allows slower devices to attach to the I/O channel with a minimum of difficulty. Any slow device using this line should drive it low immediately upon detecting a valid address and a read or write command. This line should never be held low longer than 10 clock cycles. Machine cycles (I/O or memory) are extended by an integral number of CLK cycles (210 ns).
+    bool _bus_aen{false};      // +AEN         O Address Enable: This line is used to de-gate the processor and other devices from the I/O channel to allow DMA transfers to take place. When this line is active (high), the DMA controller has control of the address bus, data bus, read command lines (memory and I/O), and the write command lines (memory and I/O).
+    bool _bus_tc{false};       // +T/C         O Terminal Count: This line provides a pulse when the terminal count for any DMA channel is reached. This signal is active high.
+    bool _cpuDataFloating{false};
+    bool _isaDataFloating{false};
 };
 
 #endif

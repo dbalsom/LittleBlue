@@ -58,6 +58,7 @@ public:
     [[nodiscard]] size_t ramSize() { return _cpu.getBus()->ramSize(); }
     // Expose the underlying bus for tools needing direct access (e.g., CGA/VRAM)
     Bus* getBus() { return _cpu.getBus(); }
+    uint8_t getALU() { return _cpu.getALU(); }
     // Read a byte from physical address space (RAM or ROM). Does not modify bus state.
     uint8_t peekPhysical(uint32_t address) { return _cpu.getBus()->peek(address); }
     [[nodiscard]] size_t romSize() { return _cpu.getBus()->romSize(); }
@@ -66,6 +67,7 @@ public:
     uint16_t* getMainRegisters() { return _cpu.getMainRegisters(); }
     uint16_t* registers() { return _cpu.getRegisters(); }
     uint16_t getRealIP() { return _cpu.getRealIP(); }
+    std::string getQueueString() const { return _cpu.getQueueString(); }
 
     // Breakpoint control: forward to CPU
     void setBreakpoint(uint16_t cs, uint16_t ip) { _cpu.setBreakpoint(cs, ip); }

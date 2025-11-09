@@ -14,7 +14,7 @@ void CGA::reset()
     cgaPhase_ = 0;
 }
 
-void CGA::wait()
+void CGA::tick()
 {
     cgaPhase_ = (cgaPhase_ + 3) & 0x0f;
 }

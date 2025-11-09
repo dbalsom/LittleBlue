@@ -11,7 +11,7 @@ class CGA
 public:
     CGA();
     void reset();
-    void wait();
+    void tick();
 
     uint8_t* getMem();
     size_t getMemSize() const;

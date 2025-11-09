@@ -370,6 +370,7 @@ public:
         _microcodeReturn = 0;
     }
     Bus *getBus() { return &_bus; }
+    uint8_t getALU() const { return _alu; }
     uint8_t* getRAM() { return _bus.ram(); }
     uint16_t* getMainRegisters() { return &_registers[24]; }
     uint16_t* getRegisters() { return &_registers[0]; }
@@ -411,6 +412,8 @@ public:
         _logBuffer.clear();
         ip() = 0;
         _nmiRequested = false;
+        _alu = 0;
+        _aluInput = 0;
         _queueBytes = 0;
         _queue = 0;
         _segmentOverride = -1;
@@ -651,7 +654,9 @@ private:
         _sign = sf();
         _zero = zf();
         _auxiliary = af();
-        _alu = 0; // default is ADD tmpa (assumed in EA calculations)
+        // Default is ADD tmpa (12) (assumed in EA calculations)
+        _alu = 0;
+        _aluInput = 0;
         _mIsM = ((_group & groupNoDirectionBit) != 0 || (_opcode & 2) == 0);
         _rni = false;
         _nx = false;
@@ -717,9 +722,9 @@ private:
         }
         if ((_group & groupSegmentOverride) != 0) {
             _segmentOverride = (_opcode >> 3) & 3;
-            return;
         }
     }
+
     uint16_t doRotate(uint16_t v, uint16_t a, bool carry)
     {
         _carry = carry;
@@ -1485,7 +1490,7 @@ private:
         _busState = nextState;
         ++_cycle;
         _interruptPending = _bus.interruptPending();
-        _bus.wait();
+        _bus.tick();
     }
     static std::string pad(const std::string& s, int n) {  return s + std::string(std::max(0, n - static_cast<int>(s.length())), ' '); }
 
@@ -1872,6 +1877,18 @@ public:
     size_t getCycleLogCapacity() const { return _logCapacity; }
     // Append a single line directly into the cycle log buffer (for diagnostics/UI)
     void appendCycleLogLine(const std::string &line) { _logBuffer.push_back(line); if (_logBuffer.size() > _logCapacity) _logBuffer.pop_front(); }
+
+    std::string getQueueString() const {
+        // Return the bytes in the queue as hex bytes from index 0 .. _queueBytes-1
+        if (_queueBytes <= 0) return std::string();
+        std::string out;
+        for (int i = 0; i < _queueBytes; ++i) {
+            const uint8_t b = static_cast<uint8_t>((_queue >> (i * 8)) & 0xFF);
+            if (!out.empty()) out += ' ';
+            out += std::format("{:02X}", static_cast<unsigned>(b));
+        }
+        return out;
+    }
 
 private:
     int _stopIP;

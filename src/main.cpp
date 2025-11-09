@@ -16,6 +16,7 @@
 #include "gui/DebuggerManager.h"
 #include "gui/DisassemblyWindow.h"
 #include "gui/MemoryViewerWindow.h"
+#include "gui/CycleLogWindow.h"
 
 #include "littleblue.h"
 #include "core/Machine.h"
@@ -188,6 +189,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     ctx->dbgManager.addWindow("Memory Viewer", std::make_unique<MemoryViewerWindow>(machine), &ctx->showMemoryViewer);
     // Register a unified MemoryViewerWindow for VRAM (constructed with Machine* and vram=true)
     ctx->dbgManager.addWindow("VRAM Viewer", std::make_unique<MemoryViewerWindow>(machine, true), &ctx->showVramViewer);
+    // Register Cycle Log window
+    ctx->dbgManager.addWindow("Cycle Log", std::make_unique<CycleLogWindow>(machine), &ctx->showCycleLog);
     *appstate = ctx;
 
     // Initialize cycle count baseline for MHz measurement
@@ -321,6 +324,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     static bool show_about = false; // persistent flag
     static bool show_demo = false;  // persistent flag
+    static bool show_io_debug = false; // persistent flag
 
     ImGui::NewFrame();
 
@@ -341,9 +345,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         if (ImGui::BeginMenu("Debug")) {
 
             // Add debugger windows (managed by DebuggerManager) - this will include
-            // Memory Viewer and VRAM Viewer menu items because they've been registered.
+            // Memory Viewer, VRAM Viewer, Cycle Log, etc., because they've been registered.
             app->dbgManager.drawMenuItems();
-            ImGui::MenuItem("Cycle Log", nullptr, &app->showCycleLog);
             ImGui::EndMenu();
         }
 
@@ -389,73 +392,21 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         ImGui::EndPopup();
     }
 
-    const ImVec2 p = ImGui::GetMousePos();
-    const ImGuiIO& io = ImGui::GetIO();
-    ImGui::Begin("Input debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::Text("ImGui::GetIO: (%.1f, %.1f)", io.MousePos.x, io.MousePos.y);
-    ImGui::Text("ImGui::GetMousePos(): (%.1f, %.1f)", p.x, p.y);
-    ImGui::Text("WantCaptureMouse: %s", io.WantCaptureMouse ? "true" : "false");
-    ImGui::End();
+    if (show_io_debug) {
+        const ImVec2 p = ImGui::GetMousePos();
+        const ImGuiIO& io = ImGui::GetIO();
+        ImGui::Begin("Input debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::Text("ImGui::GetIO: (%.1f, %.1f)", io.MousePos.x, io.MousePos.y);
+        ImGui::Text("ImGui::GetMousePos(): (%.1f, %.1f)", p.x, p.y);
+        ImGui::Text("WantCaptureMouse: %s", io.WantCaptureMouse ? "true" : "false");
+        ImGui::End();
+    }
 
     // Memory viewers are registered into DebuggerManager and will be drawn via dbgManager.showAll().
     // (No manual DrawWindow call here to avoid duplicate windows/menu items.)
 
     // Show any registered debug windows
     app->dbgManager.showAll();
-
-
-    if (app->showCycleLog) {
-        ImGui::Begin("Cycle Log", &app->showCycleLog);
-
-        // Controls: enable logging checkbox, clear, capacity
-        bool logging = app->machine->isCycleLogging();
-        if (ImGui::Checkbox("Enable Logging", &logging)) {
-            app->machine->setCycleLogging(logging);
-            // When enabling logging, clear any old data and insert a marker line so UI shows immediate feedback
-            if (logging) {
-                app->machine->clearCycleLog();
-                app->machine->appendCycleLogLine("--- Cycle logging enabled ---");
-                app->lastSeenCycleLogSize = app->machine->getCycleLogSize();
-                SDL_Log("Cycle logging enabled");
-            }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Clear")) {
-            app->machine->clearCycleLog();
-            app->lastSeenCycleLogSize = 0;
-        }
-        ImGui::SameLine();
-        ImGui::Checkbox("Auto-scroll", &app->cycleLogAutoScroll);
-
-        ImGui::SameLine();
-        ImGui::Text("Capacity:"); ImGui::SameLine();
-        if (ImGui::InputInt("##capacity", &app->cycleLogCapacityUI, 0, 1000)) {
-            if (app->cycleLogCapacityUI < 0) app->cycleLogCapacityUI = 0;
-            app->machine->setCycleLogCapacity(static_cast<size_t>(app->cycleLogCapacityUI));
-        }
-
-        ImGui::Separator();
-        // Diagnostic: show current log size and last line for quick feedback
-        ImGui::Text("Lines: %llu", static_cast<unsigned long long>(app->machine->getCycleLogSize()));
-        const auto &bufPreview = app->machine->getCycleLogBuffer();
-        if (!bufPreview.empty()) {
-            ImGui::TextWrapped("Last: %s", bufPreview.back().c_str());
-        }
-        ImGui::Separator();
-        // Log contents
-        ImGui::BeginChild("##cyclelog_child", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
-        const auto &buf = app->machine->getCycleLogBuffer();
-        for (const auto &line : buf) {
-            ImGui::TextUnformatted(line.c_str());
-        }
-        // Auto-scroll when new content appears
-        if (app->cycleLogAutoScroll && buf.size() != app->lastSeenCycleLogSize) {
-            ImGui::SetScrollHereY(1.0f);
-            app->lastSeenCycleLogSize = buf.size();
-        }
-        ImGui::EndChild();
-        ImGui::End();
-    }
 
     SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
     SDL_RenderClear(app->renderer);

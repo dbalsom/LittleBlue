@@ -24,31 +24,7 @@ endif()
 # Set the name of the executable
 set(EXECUTABLE_NAME ${PROJECT_NAME})
 
-add_executable(${EXECUTABLE_NAME}
-        src/core/Machine.cpp
-        src/core/Machine.h
-        src/littleblue.h
-        src/core/bios.h
-        src/core/font.h
-        src/core/Dmac.h
-        src/core/pic.h
-        src/core/Pit.h
-        src/core/Ppi.h
-        src/core/Disassembler.h
-        src/core/Cga.cpp
-        src/core/Cga.h
-        src/core/Crtc.cpp
-        src/core/Crtc.h
-        src/gui/imgui_memory_editor.h
-        src/gui/DebuggerManager.h
-        src/gui/DebuggerManager.cpp
-        src/gui/DisassemblyWindow.h
-        src/gui/DisassemblyWindow.cpp
-        src/gui/CpuStatusWindow.h
-        src/gui/CpuStatusWindow.cpp
-        src/gui/MemoryViewerWindow.cpp
-        src/gui/MemoryViewerWindow.h
-)
+add_executable(${EXECUTABLE_NAME})
 
 target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core  ${CMAKE_SOURCE_DIR}/src/alfe)
 
@@ -56,6 +32,31 @@ target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/co
 target_sources(${EXECUTABLE_NAME} 
 PRIVATE 
     src/main.cpp
+    src/core/Machine.cpp
+    src/core/Machine.h
+    src/littleblue.h
+    src/core/bios.h
+    src/core/font.h
+    src/core/Dmac.h
+    src/core/pic.h
+    src/core/Pit.h
+    src/core/Ppi.h
+    src/core/Disassembler.h
+    src/core/Cga.cpp
+    src/core/Cga.h
+    src/core/Crtc.cpp
+    src/core/Crtc.h
+    src/gui/imgui_memory_editor.h
+    src/gui/DebuggerManager.h
+    src/gui/DebuggerManager.cpp
+    src/gui/DisassemblyWindow.h
+    src/gui/DisassemblyWindow.cpp
+    src/gui/CpuStatusWindow.h
+    src/gui/CpuStatusWindow.cpp
+    src/gui/MemoryViewerWindow.cpp
+    src/gui/MemoryViewerWindow.h
+    src/gui/CycleLogWindow.cpp
+    src/gui/CycleLogWindow.h
 )
 
 # Set C++ version

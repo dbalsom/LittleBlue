@@ -1809,9 +1809,10 @@ private:
         doAddSubFlags(r, a ^ b, topBit((a ^ b) & (r ^ a)), ((a ^ b ^ r) & 0x10) != 0);
         return r;
     }
-    uint32_t physicalAddress(int segment, uint16_t offset)
-    {
-        return ((sr(segment) << 4) + offset) & 0xfffff;
+
+    // Calculate physical address from segment and offset, masking to 20 bits
+    uint32_t physicalAddress(const int segment, const uint16_t offset) const {
+        return ((_registers[segment] << 4) + offset) & 0xFFFFF;
     }
 
     std::string _log;

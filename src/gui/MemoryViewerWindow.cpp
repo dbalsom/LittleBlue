@@ -3,6 +3,7 @@
 #include "../core/Machine.h"
 
 void MemoryViewerWindow::show(bool *open) {
+    // ReSharper disable once CppDFAConstantConditions
     if (!_machine) {
         ImGui::Begin("Memory Viewer", open);
         ImGui::Text("No Machine instance available");
@@ -10,6 +11,7 @@ void MemoryViewerWindow::show(bool *open) {
         return;
     }
 
+    // ReSharper disable once CppDFAUnreachableCode
     if (_vramMode) {
         // Resolve CGA via machine->getBus()->cga() to avoid storing a direct CGA pointer
         auto* cga = _machine->getBus()->cga();

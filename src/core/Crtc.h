@@ -67,52 +67,42 @@ public:
     using HBlankCallback = std::function<uint8_t(void)>;
 
 public:
-    // --- Construction --------------------------------------------------------------------------
-
     explicit Crtc6845();
 
-    // --- I/O interface (relative ports: 0 = address/select, 1 = data) --------------------------
-
-    void     write(uint16_t rel_port, uint8_t data);
-    uint8_t  read(uint16_t rel_port) const;
-
-    // --- Core stepping -------------------------------------------------------------------------
+    void write(uint16_t rel_port, uint8_t data);
+    [[nodiscard]] uint8_t  read(uint16_t rel_port) const;
 
     // Step one character time. Returns (status_ptr, current_vma).
-    std::pair<const CrtcStatusBits*, uint16_t> tick(HBlankCallback hblank_cb);
+    std::pair<const CrtcStatusBits*, uint16_t> tick(const HBlankCallback& hblank_cb);
 
-    // --- Introspection -------------------------------------------------------------------------
+    [[nodiscard]] uint16_t start_address() const { return start_address_latch_; }
+    [[nodiscard]] uint16_t address() const { return vma_; }
+    [[nodiscard]] uint8_t  vlc() const { return vlc_c9_; } // vertical line counter (scanline within char row)
+    [[nodiscard]] const CrtcStatusBits& status() const { return status_; }
+    [[nodiscard]] bool hblank() const { return status_.hblank; }
+    [[nodiscard]] bool vblank() const { return status_.vblank; }
+    [[nodiscard]] bool vsync()  const { return status_.vsync; }
+    [[nodiscard]] bool hsync()  const { return status_.hsync; }
+    [[nodiscard]] bool den()    const { return status_.den; }
+    [[nodiscard]] bool border() const { return status_.hborder | status_.vborder; }
 
-    uint16_t start_address() const { return start_address_latch_; }
-    uint16_t address() const { return vma_; }
-    uint8_t  vlc() const { return vlc_c9_; } // vertical line counter (scanline within char row)
-    const CrtcStatusBits& status() const { return status_; }
-    bool hblank() const { return status_.hblank; }
-    bool vblank() const { return status_.vblank; }
-    bool den()    const { return status_.den; }
-    bool border() const { return status_.hborder | status_.vborder; }
+    [[nodiscard]] uint16_t cursor_address() const { return cursor_address_; }
+    [[nodiscard]] std::pair<uint8_t,uint8_t> cursor_extents() const { return {cursor_start_line_, cursor_end_line_}; }
+    [[nodiscard]] bool cursor_immediate() const;  // current cursor output (includes blink gating)
+    [[nodiscard]] bool cursor_enabled() const { return cursor_enabled_; }
 
-    uint16_t cursor_address() const { return cursor_address_; }
-    std::pair<uint8_t,uint8_t> cursor_extents() const { return {cursor_start_line_, cursor_end_line_}; }
-    bool cursor_immediate() const;  // current cursor output (includes blink gating)
-    bool cursor_enabled() const { return cursor_enabled_; }
+    [[nodiscard]] const std::array<uint8_t, 18>& get_registers() const { return reg_; }
 
 private:
-    // --- Helpers used by the I/O paths ---------------------------------------------------------
-
     void select_register(uint8_t idx);
     void write_register(uint8_t byte);
-    uint8_t read_register() const;
+    [[nodiscard]] uint8_t read_register() const;
 
     void update_start_address();
     void update_cursor_address();
     void update_cursor_data();
 
-    // --- Tiny trace helpers --------------------------------------------------------------------
-    static void trace_regs_() { return; }
-
-private:
-    // --- Register file and derived regs --------------------------------------------------------
+    static void trace_regs_() { }
 
     std::array<uint8_t, 18> reg_{}; // externally accessible CRTC register file
     CrtcRegister reg_select_ = CrtcRegister::HorizontalTotal;
@@ -134,7 +124,6 @@ private:
     uint8_t  cursor_blink_rate_ = BLINK_FAST_RATE;
 
     // --- CRTC counters ------------------------------------------------------------------------
-
     uint8_t  hcc_c0_ = 0;   // Horizontal character counter
     uint8_t  char_col_ = 0; // bit column within glyph (host card can depend on this)
     uint8_t  vlc_c9_ = 0;   // Vertical line counter within character row

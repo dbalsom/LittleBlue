@@ -46,6 +46,8 @@ target_sources(${EXECUTABLE_NAME}
         src/core/Cga.h
         src/core/Crtc.cpp
         src/core/Crtc.h
+        src/frontend/DisplayRenderer.cpp
+        src/frontend/DisplayRenderer.h
         src/gui/imgui_memory_editor.h
         src/gui/DebuggerManager.h
         src/gui/DebuggerManager.cpp
@@ -59,6 +61,8 @@ target_sources(${EXECUTABLE_NAME}
         src/gui/CycleLogWindow.h
         src/gui/StackViewerWindow.cpp
         src/gui/StackViewerWindow.h
+        src/gui/VideoCardStatusWindow.cpp
+        src/gui/VideoCardStatusWindow.h
 )
 
 # Set C++ version

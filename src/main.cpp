@@ -18,10 +18,12 @@
 #include "gui/MemoryViewerWindow.h"
 #include "gui/CycleLogWindow.h"
 #include "gui/StackViewerWindow.h"
+#include "gui/VideoCardStatusWindow.h"
 
 #include "littleblue.h"
 #include "core/Machine.h"
 #include "gui/CpuStatusWindow.h"
+#include "frontend/DisplayRenderer.h"
 
 constexpr uint32_t windowStartWidth = 1280;
 constexpr uint32_t windowStartHeight = 1024;
@@ -50,12 +52,17 @@ struct AppContext {
     int ticks_per_frame{0};         // precomputed ticks per 1/60s frame
     int max_frame_burst{5};         // max number of frames worth of ticks to run in a single iterate to avoid spiral of death
 
+    // Display renderer and texture
+    DisplayRenderer displayRenderer;
+    SDL_Texture* displayTexture{nullptr};
+
     // Memory editor UI
     MemoryEditor memEditor;
     bool showMemoryViewer{false};
     bool showVramViewer{false};
     bool showStackViewer{false};
     bool showCpuViewer{false};
+    bool showVideoCardViewer{false};
     bool cpuRunning{true};
     bool showDisassembly{false};
 
@@ -184,6 +191,13 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     ctx->machine = machine;
     ctx->last_counter = SDL_GetPerformanceCounter();
 
+    // Create the display texture used to show the CGA framebuffer. Use RGBA and streaming access for frequent updates.
+    ctx->displayTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, DisplayRenderer::WIDTH, DisplayRenderer::HEIGHT);
+    if (!ctx->displayTexture) {
+        SDL_Log("Failed to create display texture: %s", SDL_GetError());
+        // Non-fatal; continue without texture
+    }
+
     // Register debug windows into the AppContext's manager
     ctx->dbgManager.addWindow("Disassembly", std::make_unique<DisassemblyWindow>(machine), &ctx->showDisassembly);
     ctx->dbgManager.addWindow("Cpu Status", std::make_unique<CpuStatusWindow>(machine), &ctx->showCpuViewer);
@@ -195,6 +209,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     ctx->dbgManager.addWindow("Stack Viewer", std::make_unique<StackViewerWindow>(machine), &ctx->showStackViewer);
     // Register Cycle Log window
     ctx->dbgManager.addWindow("Cycle Log", std::make_unique<CycleLogWindow>(machine), &ctx->showCycleLog);
+    // Register Video Card Status window
+    ctx->dbgManager.addWindow("Video Card Status", std::make_unique<VideoCardStatusWindow>(machine), &ctx->showVideoCardViewer);
     *appstate = ctx;
 
     // Initialize cycle count baseline for MHz measurement
@@ -332,6 +348,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     ImGui::NewFrame();
 
+    // Debug: show the raw CGA texture in an ImGui window to verify texture contents.
+    if (app->displayTexture) {
+        ImGui::Begin("Display Debug");
+        ImGui::Image(app->displayTexture, ImVec2(DisplayRenderer::WIDTH, DisplayRenderer::HEIGHT));
+        ImGui::End();
+    }
+
     // --- Main menu bar ---
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -417,6 +440,56 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     ImGui::Render();
 
+    // Update and render display texture (CGA) before ImGui is drawn so UI overlays appear on top.
+    if (app->displayTexture && app->machine) {
+        if (auto* bus = app->machine->getBus()) {
+            if (auto* cga = bus->cga()) {
+                app->displayRenderer.render(cga);
+
+                // Integer rect for texture lock/update
+                SDL_Rect src_rect_i{0, 0, static_cast<int>(DisplayRenderer::WIDTH), static_cast<int>(DisplayRenderer::HEIGHT)};
+                // Floating-point rect for rendering APIs (SDL_RenderTexture expects SDL_FRect)
+                SDL_FRect src_rect_f{0.0f, 0.0f, static_cast<float>(DisplayRenderer::WIDTH), static_cast<float>(DisplayRenderer::HEIGHT)};
+                // Try locking the streaming texture and memcpy rows to the texture memory for reliable updates.
+                void* tex_pixels = nullptr;
+                int tex_pitch = 0;
+                if (SDL_LockTexture(app->displayTexture, &src_rect_i, &tex_pixels, &tex_pitch) && (tex_pixels != nullptr)) {
+                    const uint8_t* src = app->displayRenderer.pixels();
+                    constexpr int row_bytes = DisplayRenderer::WIDTH * DisplayRenderer::BYTES_PER_PIXEL;
+                    //SDL_Log("SDL_LockTexture succeeded: pitch=%d, rowBytes=%d", tex_pitch, row_bytes);
+                    for (int y = 0; y < DisplayRenderer::HEIGHT; ++y) {
+                        uint8_t* dstRow = static_cast<uint8_t*>(tex_pixels) + static_cast<size_t>(y) * tex_pitch;
+                        const uint8_t* srcRow = src + static_cast<size_t>(y) * row_bytes;
+                        memcpy(dstRow, srcRow, row_bytes);
+                    }
+                    SDL_UnlockTexture(app->displayTexture);
+                    //SDL_Log("Texture updated via Lock/Unlock");
+                } else {
+                    // Fallback to SDL_UpdateTexture if lock failed
+                    constexpr int pitch = DisplayRenderer::WIDTH * DisplayRenderer::BYTES_PER_PIXEL;
+                    if (!SDL_UpdateTexture(app->displayTexture, &src_rect_i, app->displayRenderer.pixels(), pitch)) {
+                        SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
+                    }
+                }
+                // Render the texture stretched to the window viewport
+                SDL_Rect dst;
+                int ww, wh;
+                SDL_GetWindowSize(app->window, &ww, &wh);
+                dst.x = 0; dst.y = 0; dst.w = ww; dst.h = wh;
+                // Convert dst to floating rect for rendering
+                SDL_FRect dstF{0.0f, 0.0f, static_cast<float>(ww), static_cast<float>(wh)};
+                if (!SDL_RenderTexture(app->renderer, app->displayTexture, &src_rect_f, &dstF)) {
+                    SDL_Log("SDL_RenderTexture failed: %s", SDL_GetError());
+                    // Fallback: draw a magenta rectangle so user sees something instead of a black screen
+                    SDL_Log("Drawing fallback magenta rectangle to indicate texture render failure");
+                    SDL_SetRenderDrawColor(app->renderer, 0xFF, 0x00, 0xFF, 0xFF);
+                    SDL_RenderFillRect(app->renderer, &dstF);
+                    // Restore draw color for ImGui
+                    SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+                }
+            }
+        }
+    }
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), app->renderer);
     SDL_RenderPresent(app->renderer);
 
@@ -425,20 +498,21 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
 void SDL_AppQuit(void* appstate, SDL_AppResult result) {
     if (const auto* app = static_cast<AppContext*>(appstate)) {
-        SDL_DestroyRenderer(app->renderer);
-        SDL_DestroyWindow(app->window);
+        if (app->displayTexture) SDL_DestroyTexture(app->displayTexture);
+         SDL_DestroyRenderer(app->renderer);
+         SDL_DestroyWindow(app->window);
 
-        MIX_DestroyMixer(app->mixer);
-        SDL_CloseAudioDevice(app->audioDevice);
+         MIX_DestroyMixer(app->mixer);
+         SDL_CloseAudioDevice(app->audioDevice);
 
-        delete app;
-    }
+         delete app;
+     }
 
-    TTF_Quit();
-    MIX_Quit();
+     TTF_Quit();
+     MIX_Quit();
 
-    SDL_Log("Application quit successfully!");
-    SDL_Quit();
+     SDL_Log("Application quit successfully!");
+     SDL_Quit();
 }
 
 bool init_audio(SDL_AudioDeviceID *outAudioDevice, MIX_Mixer **outMixer)

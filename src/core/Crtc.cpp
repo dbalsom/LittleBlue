@@ -1,8 +1,5 @@
 #include "Crtc.h"
-
 #include <iostream>
-
-// --- Construction ------------------------------------------------------------------------------
 
 Crtc6845::Crtc6845() {
     reg_.fill(0);
@@ -12,10 +9,9 @@ Crtc6845::Crtc6845() {
     cursor_blink_rate_ = BLINK_FAST_RATE;
 }
 
-// --- I/O interface -----------------------------------------------------------------------------
+// Write to a CRTC register.
 // rel_port: 0 = address/select, 1 = data
-
-void Crtc6845::write(uint16_t rel_port, uint8_t data)
+void Crtc6845::write(const uint16_t rel_port, const uint8_t data)
 {
     switch (rel_port & 0x01) {
         case 0:
@@ -31,7 +27,8 @@ void Crtc6845::write(uint16_t rel_port, uint8_t data)
     }
 }
 
-uint8_t Crtc6845::read(uint16_t rel_port) const
+// Read from a CRTC register.
+uint8_t Crtc6845::read(const uint16_t rel_port) const
 {
     switch (rel_port & 0x01) {
         case 0:
@@ -45,174 +42,172 @@ uint8_t Crtc6845::read(uint16_t rel_port) const
     }
 }
 
-void Crtc6845::select_register(uint8_t idx)
+void Crtc6845::select_register(const uint8_t idx)
 {
-    if (idx > REGISTER_MAX) return;
-
+    if (idx > REGISTER_MAX) {
+        return;
+    }
     switch (idx) {
-    case 0:  reg_select_ = CrtcRegister::HorizontalTotal; break;
-    case 1:  reg_select_ = CrtcRegister::HorizontalDisplayed; break;
-    case 2:  reg_select_ = CrtcRegister::HorizontalSyncPosition; break;
-    case 3:  reg_select_ = CrtcRegister::SyncWidth; break;
-    case 4:  reg_select_ = CrtcRegister::VerticalTotal; break;
-    case 5:  reg_select_ = CrtcRegister::VerticalTotalAdjust; break;
-    case 6:  reg_select_ = CrtcRegister::VerticalDisplayed; break;
-    case 7:  reg_select_ = CrtcRegister::VerticalSync; break;
-    case 8:  reg_select_ = CrtcRegister::InterlaceMode; break;
-    case 9:  reg_select_ = CrtcRegister::MaximumScanlineAddress; break;
-    case 10: reg_select_ = CrtcRegister::CursorStartLine; break;
-    case 11: reg_select_ = CrtcRegister::CursorEndLine; break;
-    case 12: reg_select_ = CrtcRegister::StartAddressH; break;
-    case 13: reg_select_ = CrtcRegister::StartAddressL; break;
-    case 14: reg_select_ = CrtcRegister::CursorAddressH; break;
-    case 15: reg_select_ = CrtcRegister::CursorAddressL; break;
-    case 16: reg_select_ = CrtcRegister::LightPenPositionH; break;
-    default: reg_select_ = CrtcRegister::LightPenPositionL; break;
+        case 0:  reg_select_ = CrtcRegister::HorizontalTotal; break;
+        case 1:  reg_select_ = CrtcRegister::HorizontalDisplayed; break;
+        case 2:  reg_select_ = CrtcRegister::HorizontalSyncPosition; break;
+        case 3:  reg_select_ = CrtcRegister::SyncWidth; break;
+        case 4:  reg_select_ = CrtcRegister::VerticalTotal; break;
+        case 5:  reg_select_ = CrtcRegister::VerticalTotalAdjust; break;
+        case 6:  reg_select_ = CrtcRegister::VerticalDisplayed; break;
+        case 7:  reg_select_ = CrtcRegister::VerticalSync; break;
+        case 8:  reg_select_ = CrtcRegister::InterlaceMode; break;
+        case 9:  reg_select_ = CrtcRegister::MaximumScanlineAddress; break;
+        case 10: reg_select_ = CrtcRegister::CursorStartLine; break;
+        case 11: reg_select_ = CrtcRegister::CursorEndLine; break;
+        case 12: reg_select_ = CrtcRegister::StartAddressH; break;
+        case 13: reg_select_ = CrtcRegister::StartAddressL; break;
+        case 14: reg_select_ = CrtcRegister::CursorAddressH; break;
+        case 15: reg_select_ = CrtcRegister::CursorAddressL; break;
+        case 16: reg_select_ = CrtcRegister::LightPenPositionH; break;
+        default: reg_select_ = CrtcRegister::LightPenPositionL; break;
     }
 }
 
-void Crtc6845::write_register(uint8_t byte)
+void Crtc6845::write_register(const uint8_t byte)
 {
     switch (reg_select_) {
-    case CrtcRegister::HorizontalTotal:
-        // R0: 8-bit
-        reg_[0] = byte;
-        break;
-
-    case CrtcRegister::HorizontalDisplayed:
-        // R1: 8-bit
-        reg_[1] = byte;
-        break;
-
-    case CrtcRegister::HorizontalSyncPosition:
-        // R2: 8-bit
-        reg_[2] = byte;
-        break;
-
-    case CrtcRegister::SyncWidth:
-        // R3: 8-bit
-        reg_[3] = byte;
-        break;
-
-    case CrtcRegister::VerticalTotal:
-        // R4: 7-bit
-        reg_[4] = static_cast<uint8_t>(byte & 0x7F);
-        std::cout << "CRTC Register Write (04h): VerticalTotal updated: " << static_cast<unsigned>(reg_[4]);
-        break;
-
-    case CrtcRegister::VerticalTotalAdjust:
-        // R5: 5-bit
-        reg_[5] = static_cast<uint8_t>(byte & 0x1F);
-        break;
-
-    case CrtcRegister::VerticalDisplayed:
-        // R6: 7-bit
-        reg_[6] = static_cast<uint8_t>(byte & 0x7F);
-        break;
-
-    case CrtcRegister::VerticalSync:
-        // R7: 7-bit
-        reg_[7] = static_cast<uint8_t>(byte & 0x7F);
-        trace_regs_();
-        std::cout <<  "CRTC Register Write (07h): VerticalSync updated: " << static_cast<unsigned>(reg_[7]);
-        break;
-
-    case CrtcRegister::InterlaceMode:
-        // R8: 2-bit
-        reg_[8] = static_cast<uint8_t>(byte & 0x03);
-        break;
-
-    case CrtcRegister::MaximumScanlineAddress:
-        // R9: 5-bit
-        reg_[9] = static_cast<uint8_t>(byte & 0x1F);
-        update_cursor_data();
-        break;
-
-    case CrtcRegister::CursorStartLine:
-    {
-        // R10: 7-bit field; includes cursor attrs in upper nibble
-        reg_[10] = static_cast<uint8_t>(byte & 0x7F);
-
-        cursor_start_line_ = static_cast<uint8_t>(byte & CURSOR_LINE_MASK);
-
-        // IMPORTANT: parentheses — we want (byte & mask) >> 4
-        const uint8_t attr = static_cast<uint8_t>((byte & CURSOR_ATTR_MASK) >> 4);
-        switch (attr) {
-        case 0b00:
-            cursor_enabled_ = true;
-            has_cursor_blink_rate_ = false; // solid
+        case CrtcRegister::HorizontalTotal:
+            // R0: 8-bit
+            reg_[0] = byte;
             break;
-        case 0b01:
-            cursor_enabled_ = false;        // disabled (some hardware still blinks visually, but we gate here)
-            has_cursor_blink_rate_ = false;
+
+        case CrtcRegister::HorizontalDisplayed:
+            // R1: 8-bit
+            reg_[1] = byte;
             break;
-        case 0b10:
-            cursor_enabled_ = true;
-            has_cursor_blink_rate_ = true;
-            cursor_blink_rate_ = BLINK_FAST_RATE;
+
+        case CrtcRegister::HorizontalSyncPosition:
+            // R2: 8-bit
+            reg_[2] = byte;
             break;
-        default:
-            cursor_enabled_ = true;
-            has_cursor_blink_rate_ = true;
-            cursor_blink_rate_ = BLINK_SLOW_RATE;
+
+        case CrtcRegister::SyncWidth:
+            // R3: 8-bit
+            reg_[3] = byte;
+            break;
+
+        case CrtcRegister::VerticalTotal:
+            // R4: 7-bit
+            reg_[4] = static_cast<uint8_t>(byte & 0x7F);
+            std::cout << "CRTC Register Write (04h): VerticalTotal updated: " << static_cast<unsigned>(reg_[4]);
+            break;
+
+        case CrtcRegister::VerticalTotalAdjust:
+            // R5: 5-bit
+            reg_[5] = static_cast<uint8_t>(byte & 0x1F);
+            break;
+
+        case CrtcRegister::VerticalDisplayed:
+            // R6: 7-bit
+            reg_[6] = static_cast<uint8_t>(byte & 0x7F);
+            break;
+
+        case CrtcRegister::VerticalSync:
+            // R7: 7-bit
+            reg_[7] = static_cast<uint8_t>(byte & 0x7F);
+            trace_regs_();
+            std::cout <<  "CRTC Register Write (07h): VerticalSync updated: " << static_cast<unsigned>(reg_[7]);
+            break;
+
+        case CrtcRegister::InterlaceMode:
+            // R8: 2-bit
+            reg_[8] = static_cast<uint8_t>(byte & 0x03);
+            break;
+
+        case CrtcRegister::MaximumScanlineAddress:
+            // R9: 5-bit
+            reg_[9] = static_cast<uint8_t>(byte & 0x1F);
+            update_cursor_data();
+            break;
+
+        case CrtcRegister::CursorStartLine:
+        {
+            // R10: 7-bit field; includes cursor attrs in upper nibble
+            reg_[10] = static_cast<uint8_t>(byte & 0x7F);
+
+            cursor_start_line_ = static_cast<uint8_t>(byte & CURSOR_LINE_MASK);
+
+            // IMPORTANT: parentheses — we want (byte & mask) >> 4
+            const uint8_t attr = static_cast<uint8_t>((byte & CURSOR_ATTR_MASK) >> 4);
+            switch (attr) {
+                case 0b00:
+                    cursor_enabled_ = true;
+                    has_cursor_blink_rate_ = false; // solid
+                    break;
+                case 0b01:
+                    cursor_enabled_ = false;        // disabled (some hardware still blinks visually, but we gate here)
+                    has_cursor_blink_rate_ = false;
+                    break;
+                case 0b10:
+                    cursor_enabled_ = true;
+                    has_cursor_blink_rate_ = true;
+                    cursor_blink_rate_ = BLINK_FAST_RATE;
+                    break;
+                default:
+                    cursor_enabled_ = true;
+                    has_cursor_blink_rate_ = true;
+                    cursor_blink_rate_ = BLINK_SLOW_RATE;
+                    break;
+            }
+            update_cursor_data();
             break;
         }
-        update_cursor_data();
-        break;
-    }
 
-    case CrtcRegister::CursorEndLine:
-        // R11: 5-bit
-        reg_[11] = static_cast<uint8_t>(byte & 0x1F);
-        update_cursor_data();
-        break;
+        case CrtcRegister::CursorEndLine:
+            // R11: 5-bit
+            reg_[11] = static_cast<uint8_t>(byte & 0x1F);
+            update_cursor_data();
+            break;
 
-    case CrtcRegister::StartAddressH:
-        // R12: 6-bit
-        reg_[12] = static_cast<uint8_t>(byte & 0x3F);
-        std::cout << "CRTC Register Write (0Ch): StartAddressH updated: " << std::hex << std::uppercase << static_cast<unsigned>(byte);
-        update_start_address();
-        break;
+        case CrtcRegister::StartAddressH:
+            // R12: 6-bit
+            reg_[12] = static_cast<uint8_t>(byte & 0x3F);
+            std::cout << "CRTC Register Write (0Ch): StartAddressH updated: " << std::hex << std::uppercase << static_cast<unsigned>(byte);
+            update_start_address();
+            break;
 
-    case CrtcRegister::StartAddressL:
-        // R13: 8-bit
-        reg_[13] = byte;
-        trace_regs_();\
-        std::cout << "CRTC Register Write (0Dh): StartAddressL updated: " << std::hex << std::uppercase << static_cast<unsigned>(byte);
-        break;
+        case CrtcRegister::StartAddressL:
+            // R13: 8-bit
+            reg_[13] = byte;
+            std::cout << "CRTC Register Write (0Dh): StartAddressL updated: " << std::hex << std::uppercase << static_cast<unsigned>(byte);
+            break;
 
-    case CrtcRegister::CursorAddressH:
-        // R14: 6-bit, readable
-        reg_[14] = static_cast<uint8_t>(byte & 0x3F);
-        update_cursor_address();
-        break;
+        case CrtcRegister::CursorAddressH:
+            // R14: 6-bit, readable
+            reg_[14] = static_cast<uint8_t>(byte & 0x3F);
+            update_cursor_address();
+            break;
 
-    case CrtcRegister::CursorAddressL:
-        // R15: 8-bit, readable
-        reg_[15] = byte;
-        update_cursor_address();
-        break;
+        case CrtcRegister::CursorAddressL:
+            // R15: 8-bit, readable
+            reg_[15] = byte;
+            update_cursor_address();
+            break;
 
-    case CrtcRegister::LightPenPositionH:
-        // R16: read-only
-        break;
-
-    case CrtcRegister::LightPenPositionL:
-        // R17: read-only
-        break;
+        case CrtcRegister::LightPenPositionH:
+        case CrtcRegister::LightPenPositionL:
+            // R16: read-only
+            // R17: read-only
+            break;
     }
 }
 
 uint8_t Crtc6845::read_register() const
 {
     switch (reg_select_) {
-    case CrtcRegister::CursorAddressH:
-    case CrtcRegister::CursorAddressL:
-    case CrtcRegister::LightPenPositionH:
-    case CrtcRegister::LightPenPositionL:
-        return reg_[static_cast<size_t>(reg_select_)];
-    default:
-        return REGISTER_UNREADABLE_VALUE;
+        case CrtcRegister::CursorAddressH:
+        case CrtcRegister::CursorAddressL:
+        case CrtcRegister::LightPenPositionH:
+        case CrtcRegister::LightPenPositionL:
+            return reg_[static_cast<size_t>(reg_select_)];
+        default:
+            return REGISTER_UNREADABLE_VALUE;
     }
 }
 
@@ -247,7 +242,7 @@ void Crtc6845::update_cursor_data()
         for (uint8_t i = 0; i <= reg_[11] && i < CRTC_ROW_MAX; ++i) {
             cursor_data_[i] = true;
         }
-        for (size_t i = static_cast<size_t>(reg_[10]); i < CRTC_ROW_MAX; ++i) {
+        for (auto i = static_cast<size_t>(reg_[10]); i < CRTC_ROW_MAX; ++i) {
             cursor_data_[i] = true;
         }
         cursor_start_line_ = reg_[10];
@@ -273,7 +268,7 @@ bool Crtc6845::cursor_immediate() const
 // Returns (status_ptr, current_vma)
 
 std::pair<const Crtc6845::CrtcStatusBits*, uint16_t>
-Crtc6845::tick(HBlankCallback hblank_cb)
+Crtc6845::tick(const HBlankCallback& hblank_cb)
 {
     // transient pulses low unless we fire them this tick
     status_.hsync = false;
@@ -281,8 +276,7 @@ Crtc6845::tick(HBlankCallback hblank_cb)
 
     // Update C0
     const uint8_t prev_c0 = hcc_c0_;
-    hcc_c0_ = static_cast<uint8_t>(hcc_c0_ + 1);
-
+    hcc_c0_++;
     if (hcc_c0_ == 0) {
         // wrapped
         status_.hborder = false;
@@ -293,13 +287,13 @@ Crtc6845::tick(HBlankCallback hblank_cb)
     }
 
     // advance VMA to next char
-    vma_ = static_cast<uint16_t>(vma_ + 1);
+    vma_++;
     char_col_ = 0;
 
     // Process horizontal blanking period
     if (status_.hblank) {
         // increment HSYNC counter
-        hsc_c3l_ = static_cast<uint8_t>(hsc_c3l_ + 1);
+        hsc_c3l_++;
 
         // Allow the adapter to supply effective HSYNC width
         const uint8_t eff = hblank_cb ? hblank_cb() : reg_[3];
@@ -309,7 +303,7 @@ Crtc6845::tick(HBlankCallback hblank_cb)
             // Logical end of scanline (fire HSYNC pulse)
             if (status_.vblank) {
                 // count VSYNC lines during vblank
-                vsc_c3h_ = static_cast<uint8_t>(vsc_c3h_ + 1);
+                vsc_c3h_++;
                 if (vsc_c3h_ == CRTC_VBLANK_HEIGHT) {
                     in_last_vblank_line_ = true;
                     vsc_c3h_ = 0;
@@ -346,13 +340,13 @@ Crtc6845::tick(HBlankCallback hblank_cb)
         hsc_c3l_ = 0;
     }
 
-    if (hcc_c0_ == static_cast<uint8_t>(reg_[0] + 1) && in_last_vblank_line_) {
+    if ((hcc_c0_ == (reg_[0] + 1)) && in_last_vblank_line_) {
         // Right before the new frame begins, draw one char of border.
         // (In Rust you do this at c0 == r0; here we keep the intent.)
         // When we roll to +1 we clear vblank soon after.
     }
 
-    if (hcc_c0_ == static_cast<uint8_t>(reg_[0] + 1)) {
+    if (hcc_c0_ == (reg_[0] + 1)) {
         // leaving left overscan; finished scanning row
         if (in_last_vblank_line_) {
             in_last_vblank_line_ = false;
@@ -363,7 +357,7 @@ Crtc6845::tick(HBlankCallback hblank_cb)
         status_.hborder = false;
 
         // Next scanline of the current row
-        vlc_c9_ = static_cast<uint8_t>(vlc_c9_ + 1);
+        vlc_c9_++;
 
         // Return VMA to row start
         vma_ = vma_t_;
@@ -379,7 +373,7 @@ Crtc6845::tick(HBlankCallback hblank_cb)
         if (vlc_c9_ > reg_[9]) {
             // finished this character row
             vlc_c9_ = 0;
-            vcc_c4_ = static_cast<uint8_t>(vcc_c4_ + 1);
+            vcc_c4_++;
             vma_ = vma_t_;
 
             if (vcc_c4_ == reg_[7]) {
@@ -389,7 +383,7 @@ Crtc6845::tick(HBlankCallback hblank_cb)
                 status_.den = false;
 
                 if (has_cursor_blink_rate_) {
-                    cursor_blink_ct_ = static_cast<uint8_t>(cursor_blink_ct_ + 1);
+                    cursor_blink_ct_++;
                     if (cursor_blink_ct_ == cursor_blink_rate_) {
                         cursor_blink_ct_ = 0;
                         blink_state_ = !blink_state_;
@@ -399,7 +393,7 @@ Crtc6845::tick(HBlankCallback hblank_cb)
         }
 
         if (vcc_c4_ == reg_[6]) {
-            // entering bottom overscan
+            // Entering bottom overscan
             status_.den = false;
             status_.vborder = true;
         }

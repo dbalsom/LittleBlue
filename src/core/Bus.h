@@ -24,6 +24,19 @@ public:
         _pit.setGate(0, true);
         _pit.setGate(1, true);
         _pit.setGate(2, true);
+
+        auto doPostCheck = false;
+        auto haveFPU = false;
+
+
+
+        // Set DIP switches for CGA
+        _ppi.setA(0, doPostCheck); // Switch 1: OFF [normal boot]
+        _ppi.setA(1, !haveFPU); // Switch 2: OFF [40-column mode]
+        _ppi.setA(2, true); // Switch 3: OFF
+        _ppi.setA(3, true); // Switch 4: OFF
+        _ppi.setA(4, true); // Switch 6: ON [CGA installed]
+        _ppi.setA(5, false); // Switch 7: OFF [CGA installed]
     }
     uint8_t* ram() { return &_ram[0]; }
     [[nodiscard]] size_t ramSize() const { return _ram.size(); }
@@ -33,7 +46,7 @@ public:
 
     // Read a byte from a physical address without changing bus state.
     // This allows tools (disassembler/UI) to inspect memory (RAM or ROM) directly.
-    uint8_t peek(uint32_t address) const {
+    [[nodiscard]] uint8_t peek(uint32_t address) const {
         // Real-mode uses 20-bit physical addressing; mask to 20 bits in callers if needed.
         if (address >= ROM_BASE_ADDRESS) {
             uint32_t romIndex = address - ROM_BASE_ADDRESS;
@@ -200,6 +213,10 @@ public:
                 case 0xa0:
                     _nmiEnabled = (data & 0x80) != 0;
                     break;
+                case 0x3C0:
+                    _cga.writeIo(_address & 0x0F, data);
+                    break;
+
                 default:
                     break;
             }
@@ -242,7 +259,10 @@ public:
                         updatePPI();
                         return b;
                     }
+                case 0x3C0:
+                    return _cga.readIo(_address & 0x0F);
                 default:
+                    std::cout << "Unhandled IO read from port " << std::hex << _address << std::dec << "\n";
                     return 0xFF;
             }
         }
@@ -350,6 +370,22 @@ private:
         }
         _counter2Gate = _ppi.getB(0);
         _pit.setGate(2, _counter2Gate);
+
+        if (!_ppi.getB(3)) {
+            // Present switches 1 to 4
+            _ppi.setC(0, (_dipSwitch1 & 0x01) != 0);
+            _ppi.setC(1, (_dipSwitch1 & 0x02) != 0);
+            _ppi.setC(2, (_dipSwitch1 & 0x04) != 0);
+            _ppi.setC(3, (_dipSwitch1 & 0x08) != 0);
+        }
+        else {
+            // Present switches 5 to 8
+            _ppi.setC(0, (_dipSwitch1 & 0x10) != 0);
+            _ppi.setC(1, (_dipSwitch1 & 0x20) != 0);
+            _ppi.setC(2, (_dipSwitch1 & 0x40) != 0);
+            _ppi.setC(3, (_dipSwitch1 & 0x80) != 0);
+        }
+
     }
     uint32_t dmaAddressHigh(int channel)
     {
@@ -386,6 +422,7 @@ private:
     PIT _pit;
     PPI _ppi;
     CGA _cga;
+    uint8_t _dipSwitch1{0b1010'1101};
     int _pitPhase;
     bool _lastCounter0Output;
     bool _lastCounter1Output;

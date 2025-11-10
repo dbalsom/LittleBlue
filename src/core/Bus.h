@@ -24,19 +24,6 @@ public:
         _pit.setGate(0, true);
         _pit.setGate(1, true);
         _pit.setGate(2, true);
-
-        auto doPostCheck = false;
-        auto haveFPU = false;
-
-
-
-        // Set DIP switches for CGA
-        _ppi.setA(0, doPostCheck); // Switch 1: OFF [normal boot]
-        _ppi.setA(1, !haveFPU); // Switch 2: OFF [40-column mode]
-        _ppi.setA(2, true); // Switch 3: OFF
-        _ppi.setA(3, true); // Switch 4: OFF
-        _ppi.setA(4, true); // Switch 6: ON [CGA installed]
-        _ppi.setA(5, false); // Switch 7: OFF [CGA installed]
     }
     uint8_t* ram() { return &_ram[0]; }
     [[nodiscard]] size_t ramSize() const { return _ram.size(); }

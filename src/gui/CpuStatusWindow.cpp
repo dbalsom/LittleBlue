@@ -7,7 +7,7 @@
 #include <cstring>
 #include <charconv>
 
-void CpuStatusWindow::show(bool *open) {
+void CpuStatusWindow::show(bool* open) {
     // Ensure ImGui context is available (helps static analyzers and prevents null deref)
     IM_ASSERT(ImGui::GetCurrentContext() != nullptr);
 
@@ -32,7 +32,8 @@ void CpuStatusWindow::show(bool *open) {
                 if (ImGui::Button("Stop")) {
                     _machine->stop();
                 }
-            } else {
+            }
+            else {
                 if (ImGui::Button("Run")) {
                     _machine->run();
                 }
@@ -51,7 +52,12 @@ void CpuStatusWindow::show(bool *open) {
             }
             ImGui::SameLine();
             // The 'Reset' button resets the CPU and begins execution from the reset vector
-            if (ImGui::Button("Reset")) { _machine->reset(); }
+            if (ImGui::Button("Reset CPU")) { _machine->resetCpu(); }
+            ImGui::SameLine();
+            // The 'Reboot' button resets the system bus/devices (FDC, PIC, PIT, DMAC, etc.)
+            if (ImGui::Button("Reset PC")) {
+                _machine->resetMachine();
+            }
             ImGui::SameLine();
             // Show the current Machine state
             const auto machine_state = _machine->getState();
@@ -71,58 +77,75 @@ void CpuStatusWindow::show(bool *open) {
 
             ImGui::Text("Registers:");
             ImGui::Columns(4, nullptr, false);
-            ImGui::Text("AX: %04X", regs[reg_to_idx(Register::AX)]); ImGui::NextColumn();
-            ImGui::Text("BX: %04X", regs[reg_to_idx(Register::BX)]); ImGui::NextColumn();
-            ImGui::Text("CX: %04X", regs[reg_to_idx(Register::CX)]); ImGui::NextColumn();
-            ImGui::Text("DX: %04X", regs[reg_to_idx(Register::DX)]); ImGui::NextColumn();
+            ImGui::Text("AX: %04X", regs[reg_to_idx(Register::AX)]);
+            ImGui::NextColumn();
+            ImGui::Text("BX: %04X", regs[reg_to_idx(Register::BX)]);
+            ImGui::NextColumn();
+            ImGui::Text("CX: %04X", regs[reg_to_idx(Register::CX)]);
+            ImGui::NextColumn();
+            ImGui::Text("DX: %04X", regs[reg_to_idx(Register::DX)]);
+            ImGui::NextColumn();
 
-            ImGui::Text("SP: %04X", regs[reg_to_idx(Register::SP)]); ImGui::NextColumn();
-            ImGui::Text("BP: %04X", regs[reg_to_idx(Register::BP)]); ImGui::NextColumn();
-            ImGui::Text("SI: %04X", regs[reg_to_idx(Register::SI)]); ImGui::NextColumn();
-            ImGui::Text("DI: %04X", regs[reg_to_idx(Register::DI)]); ImGui::NextColumn();
+            ImGui::Text("SP: %04X", regs[reg_to_idx(Register::SP)]);
+            ImGui::NextColumn();
+            ImGui::Text("BP: %04X", regs[reg_to_idx(Register::BP)]);
+            ImGui::NextColumn();
+            ImGui::Text("SI: %04X", regs[reg_to_idx(Register::SI)]);
+            ImGui::NextColumn();
+            ImGui::Text("DI: %04X", regs[reg_to_idx(Register::DI)]);
+            ImGui::NextColumn();
             ImGui::Columns(1);
 
             ImGui::Separator();
             ImGui::Columns(4, nullptr, false);
-            ImGui::Text("CS: %04X", regs[reg_to_idx(Register::CS)]); ImGui::NextColumn();
-            ImGui::Text("DS: %04X", regs[reg_to_idx(Register::DS)]); ImGui::NextColumn();
-            ImGui::Text("SS: %04X", regs[reg_to_idx(Register::SS)]); ImGui::NextColumn();
-            ImGui::Text("ES: %04X", regs[reg_to_idx(Register::ES)]); ImGui::NextColumn();
+            ImGui::Text("CS: %04X", regs[reg_to_idx(Register::CS)]);
+            ImGui::NextColumn();
+            ImGui::Text("DS: %04X", regs[reg_to_idx(Register::DS)]);
+            ImGui::NextColumn();
+            ImGui::Text("SS: %04X", regs[reg_to_idx(Register::SS)]);
+            ImGui::NextColumn();
+            ImGui::Text("ES: %04X", regs[reg_to_idx(Register::ES)]);
+            ImGui::NextColumn();
 
             ImGui::Separator();
             ImGui::Columns(4, nullptr, false);
-            ImGui::Text("PC: %04X", regs[reg_to_idx(Register::PC)]); ImGui::NextColumn();
+            ImGui::Text("PC: %04X", regs[reg_to_idx(Register::PC)]);
+            ImGui::NextColumn();
             ImGui::Text("IP: %04X", ip); //ImGui::NextColumn();
 
             ImGui::Separator();
             ImGui::Columns(1, nullptr, false);
             ImGui::Text("Internal Registers:");
             ImGui::Columns(4, nullptr, false);
-            ImGui::Text("TMPA: %04X", regs[reg_to_idx(Register::TMPA)]); ImGui::NextColumn();
-            ImGui::Text("TMPB: %04X", regs[reg_to_idx(Register::TMPB)]); ImGui::NextColumn();
-            ImGui::Text("IND : %04X", regs[reg_to_idx(Register::IND)]); ImGui::NextColumn();
-            ImGui::Text("OPR : %04X", regs[reg_to_idx(Register::OPR)]); ImGui::NextColumn();
+            ImGui::Text("TMPA: %04X", regs[reg_to_idx(Register::TMPA)]);
+            ImGui::NextColumn();
+            ImGui::Text("TMPB: %04X", regs[reg_to_idx(Register::TMPB)]);
+            ImGui::NextColumn();
+            ImGui::Text("TMPC : %04X", regs[reg_to_idx(Register::TMPC)]);
+            ImGui::NextColumn();
+            ImGui::Text("OPR : %04X", regs[reg_to_idx(Register::OPR)]);
+            ImGui::NextColumn();
 
             ImGui::Separator();
 
             // Flag names for 8088/8086 (bits 0..15). Bits not defined on 8088 are labeled RES (reserved).
             static constexpr const char* flag_names[16] = {
-                "CF",    // 0
-                "1",     // 1 (reserved/always 1 on some implementations)
-                "PF",    // 2
-                "RES",   // 3
-                "AF",    // 4
-                "RES",   // 5
-                "ZF",    // 6
-                "SF",    // 7
-                "TF",    // 8
-                "IF",    // 9
-                "DF",    // 10
-                "OF",    // 11
-                "RES",   // 12
-                "RES",   // 13
-                "RES",   // 14
-                "RES"    // 15
+                "CF", // 0
+                "1", // 1 (reserved/always 1 on some implementations)
+                "PF", // 2
+                "RES", // 3
+                "AF", // 4
+                "RES", // 5
+                "ZF", // 6
+                "SF", // 7
+                "TF", // 8
+                "IF", // 9
+                "DF", // 10
+                "OF", // 11
+                "RES", // 12
+                "RES", // 13
+                "RES", // 14
+                "RES" // 15
             };
 
             // FLAGS display: show hex value and a styled 16-bit flag breakdown
@@ -130,25 +153,30 @@ void CpuStatusWindow::show(bool *open) {
 
             // Prepare a stable bool array for the ImGui checkboxes to avoid analyzer warnings
             bool led_vals[16];
-            for (int i = 0; i < 16; ++i) led_vals[i] = ((flags >> i) & 1) != 0;
+            for (int i = 0; i < 16; ++i)
+                led_vals[i] = ((flags >> i) & 1) != 0;
 
             // Build a list of visible (non-reserved) bits in order 15..0
             std::vector<int> visibleBits;
             visibleBits.reserve(16);
             for (int b = 15; b >= 0; --b) {
                 // Omit reserved entries and the bit-1 "1" pseudo-flag
-                if (std::strcmp(flag_names[b], "RES") != 0 && std::strcmp(flag_names[b], "1") != 0) visibleBits.push_back(b);
+                if (std::strcmp(flag_names[b], "RES") != 0 && std::strcmp(flag_names[b], "1") != 0)
+                    visibleBits.push_back(b);
             }
 
             ImGui::Columns(1);
-            ImGui::Text("FLAGS: %04X", static_cast<unsigned>(flags)); ImGui::NextColumn();
+            ImGui::Text("FLAGS: %04X", static_cast<unsigned>(flags));
+            ImGui::NextColumn();
 
             if (!visibleBits.empty()) {
                 const int cols = static_cast<int>(visibleBits.size());
                 ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
                 // Use an ImGui table so columns size/flow is handled by the layout system
-                if (ImGui::BeginTable("flags_table", cols, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_NoHostExtendX)) {
+                if (ImGui::BeginTable("flags_table", cols,
+                                      ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV |
+                                      ImGuiTableFlags_NoHostExtendX)) {
                     // First row: labels (centered)
                     ImGui::TableNextRow();
                     for (int i = 0; i < cols; ++i) {
@@ -188,7 +216,7 @@ void CpuStatusWindow::show(bool *open) {
                         draw_list->AddRect(
                             p,
                             ImVec2(p.x + square_size, p.y + square_size),
-                            ImGui::GetColorU32(ImVec4(0,0,0,0.6f)),
+                            ImGui::GetColorU32(ImVec4(0, 0, 0, 0.6f)),
                             2.0f,
                             0,
                             1.0f);
@@ -208,6 +236,56 @@ void CpuStatusWindow::show(bool *open) {
             ImGui::Text("ALU: %0X", _machine->getALU());
 
             ImGui::Separator();
+            ImGui::Columns(1, nullptr, false);
+            switch (_machine->getCpu()->getMCState()) {
+                case Cpu::stateRunning:
+                    ImGui::Text("Microcode State: Running");
+                    break;
+                case Cpu::stateWaitingForQueueData:
+                    ImGui::Text("Microcode State: Waiting for Queue Data");
+                    break;
+                case Cpu::stateWaitingForQueueIdle:
+                    ImGui::Text("Microcode State: Waiting for Queue Idle");
+                    break;
+                case Cpu::stateIODelay2:
+                    ImGui::Text("Microcode State: IO Delay 2");
+                    break;
+                case Cpu::stateIODelay1:
+                    ImGui::Text("Microcode State: IO Delay 1");
+                    break;
+                case Cpu::stateWaitingUntilFirstByteCanStart:
+                    ImGui::Text("Microcode State: Waiting Until First Byte Can Start");
+                    break;
+                case Cpu::stateWaitingUntilFirstByteDone:
+                    ImGui::Text("Microcode State: Waiting Until First Byte Done");
+                    break;
+                case Cpu::stateWaitingUntilSecondByteDone:
+                    ImGui::Text("Microcode State: Waiting Until Second Byte Done");
+                    break;
+                case Cpu::stateSingleCycleWait:
+                    ImGui::Text("Microcode State: Single Cycle Wait");
+                    break;
+                case Cpu::stateHaltingStart:
+                    ImGui::Text("Microcode State: Halting Start");
+                    break;
+                case Cpu::stateHalting3:
+                    ImGui::Text("Microcode State: Halting 3");
+                    break;
+                case Cpu::stateHalting2:
+                    ImGui::Text("Microcode State: Halting 2");
+                    break;
+                case Cpu::stateHalting1:
+                    ImGui::Text("Microcode State: Halting 1");
+                    break;
+                case Cpu::stateHalted:
+                    ImGui::Text("Microcode State: Halted");
+                    break;
+                case Cpu::stateSuspending:
+                    ImGui::Text("Microcode State: Suspending");
+                    break;
+            }
+
+            ImGui::Separator();
             // Breakpoint controls (code breakpoint in form XXXX:XXXX)
             static char bp_input[16] = "";
             // Persisted parse-error marker set when Set Breakpoint fails
@@ -215,7 +293,8 @@ void CpuStatusWindow::show(bool *open) {
 
             // Helper: parse a CS:IP string (hex) from a C string buffer. Returns true on success and writes
             // parsed values into out_cs/out_ip.
-            auto parse_cs_ip = [](const char* buf, uint16_t &out_cs, uint16_t &out_ip) -> bool {
+            auto parse_cs_ip = [](const char* buf, uint16_t& out_cs, uint16_t& out_ip) -> bool
+            {
                 if (buf == nullptr) {
                     return false;
                 }
@@ -232,12 +311,12 @@ void CpuStatusWindow::show(bool *open) {
                 // parse hex using from_chars
                 unsigned long long cs_val = 0, ip_val = 0;
                 if (auto [ptr, ec] =
-                    std::from_chars(cs_sv.data(), cs_sv.data() + cs_sv.size(), cs_val, 16);
+                        std::from_chars(cs_sv.data(), cs_sv.data() + cs_sv.size(), cs_val, 16);
                     ec != std::errc() || ptr != cs_sv.data() + cs_sv.size()) {
                     return false;
                 }
                 if (auto [ptr2, ec2] =
-                    std::from_chars(ip_sv.data(), ip_sv.data() + ip_sv.size(), ip_val, 16);
+                        std::from_chars(ip_sv.data(), ip_sv.data() + ip_sv.size(), ip_val, 16);
                     ec2 != std::errc() || ptr2 != ip_sv.data() + ip_sv.size()) {
                     return false;
                 }
@@ -256,20 +335,23 @@ void CpuStatusWindow::show(bool *open) {
             uint16_t parsed_cs = 0, parsed_ip = 0;
             if (bp_input[0] != '\0') {
                 bp_valid = parse_cs_ip(bp_input, parsed_cs, parsed_ip);
-            } else {
+            }
+            else {
                 // empty input considered neutral (not invalid)
                 bp_valid = true;
             }
 
             // If live validation passes, clear any previous parse-error state; otherwise preserve it
-            if (bp_valid) bp_parse_error = false;
+            if (bp_valid)
+                bp_parse_error = false;
 
             const bool show_invalid = (!bp_valid) || bp_parse_error;
             if (show_invalid) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
             }
             ImGui::InputText("##bpaddr", bp_input, sizeof(bp_input));
-            if (show_invalid) ImGui::PopStyleColor();
+            if (show_invalid)
+                ImGui::PopStyleColor();
             ImGui::PopItemWidth();
 
             // Disable the Set button when input is invalid
@@ -280,14 +362,18 @@ void CpuStatusWindow::show(bool *open) {
                 bool ok = false;
                 uint16_t cs_v = 0, ip_v = 0;
                 if (bp_valid) {
-                    cs_v = parsed_cs; ip_v = parsed_ip; ok = true;
-                } else if (bp_input[0] != '\0') {
+                    cs_v = parsed_cs;
+                    ip_v = parsed_ip;
+                    ok = true;
+                }
+                else if (bp_input[0] != '\0') {
                     ok = parse_cs_ip(bp_input, cs_v, ip_v);
                 }
                 if (ok) {
                     _machine->setBreakpoint(cs_v, ip_v);
                     bp_parse_error = false;
-                } else {
+                }
+                else {
                     bp_parse_error = true;
                 }
             }
@@ -307,14 +393,15 @@ void CpuStatusWindow::show(bool *open) {
                 const uint16_t bip = _machine->breakpointIP();
                 ImGui::SameLine();
                 ImGui::Text("Breakpoint set: %04X:%04X", static_cast<unsigned>(bcs), static_cast<unsigned>(bip));
-            } else {
+            }
+            else {
                 ImGui::SameLine();
                 ImGui::Text("No breakpoint set");
             }
             // If a breakpoint was hit, show a message and pause CPU
             if (_machine->breakpointHit()) {
                 ImGui::Separator();
-                ImGui::TextColored(ImVec4(1,0,0,1), "Breakpoint hit!");
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Breakpoint hit!");
             }
             ImGui::Separator();
         }

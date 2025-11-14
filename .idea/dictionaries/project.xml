@@ -1,9 +1,11 @@
 <component name="ProjectDictionaryState">
   <dictionary name="project">
     <words>
+      <w>autoinitialization</w>
       <w>balsom</w>
       <w>crtc</w>
       <w>disasm</w>
+      <w>dmac</w>
       <w>hchar</w>
       <w>microcoded</w>
       <w>vram</w>

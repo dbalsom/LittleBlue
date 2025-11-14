@@ -5,12 +5,14 @@
 
 enum class MachineState { Running, Stopped, BreakpointHit };
 
-class Machine {
+class Machine
+{
 
 public:
     Machine() {
         //_cpu.setConsoleLogging();
         _cpu.reset();
+        _cpu.getBus()->reset();
         // _cpu.setExtents(
         //     -4,
         //     1000,
@@ -32,12 +34,18 @@ public:
         }
     }
 
-    void reset() {
+    void resetCpu() {
         _cpu.reset();
+    }
+
+    void resetMachine() {
+        _cpu.reset();
+        _cpu.getBus()->reset();
     }
 
     void setState(const MachineState state) { _state = state; }
     [[nodiscard]] MachineState getState() const { return _state; }
+
     [[nodiscard]] std::string getStateString() const {
         switch (_state) {
             case MachineState::Running:
@@ -50,6 +58,7 @@ public:
                 return "Unknown";
         }
     }
+
     [[nodiscard]] bool isRunning() const { return _state == MachineState::Running; }
     void stop() { _state = MachineState::Stopped; }
     void run() { _state = MachineState::Running; }
@@ -58,6 +67,7 @@ public:
     [[nodiscard]] size_t ramSize() { return _cpu.getBus()->ramSize(); }
     // Expose the underlying bus for tools needing direct access (e.g., CGA/VRAM)
     Bus* getBus() { return _cpu.getBus(); }
+    Cpu* getCpu() { return &_cpu; }
     uint8_t getALU() { return _cpu.getALU(); }
     // Read a byte from physical address space (RAM or ROM). Does not modify bus state.
     uint8_t peekPhysical(uint32_t address) { return _cpu.getBus()->peek(address); }
@@ -90,7 +100,7 @@ public:
     [[nodiscard]] size_t getCycleLogSize() const { return _cpu.getCycleLogSize(); }
     [[nodiscard]] size_t getCycleLogCapacity() const { return _cpu.getCycleLogCapacity(); }
     // Append a line directly to the CPU's cycle log buffer (diagnostic helper)
-    void appendCycleLogLine(const std::string &line) { _cpu.appendCycleLogLine(line); }
+    void appendCycleLogLine(const std::string& line) { _cpu.appendCycleLogLine(line); }
 
     // Step the CPU to the next instruction boundary. Returns the number of CPU cycles executed.
     uint64_t stepInstruction() {
@@ -99,6 +109,23 @@ public:
             _state = MachineState::Stopped;
         }
         return cycles;
+    }
+
+    void sendScanCode(uint8_t scancode) {
+        const auto ppi = _cpu.getBus()->ppi();
+
+        // PB6 LOW output disables the clock line to the keyboard, so only read in a keyboard byte if it is high.
+        if (!ppi->getB(6)) {
+            return;
+        }
+
+        for (int i = 0; i < 8; ++i) {
+            const bool bit = (scancode & (1 << i)) != 0;
+            ppi->setA(i, bit);
+        }
+
+        // Request a keyboard interrupt.
+        _cpu.getBus()->pic()->setIRQLine(1, true);
     }
 
 private:

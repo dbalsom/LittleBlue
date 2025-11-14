@@ -250,8 +250,7 @@ void Crtc6845::update_cursor_data()
     }
 }
 
-// --- Cursor immediate (includes blink gating) --------------------------------------------------
-
+// Return the immediate status of the cursor
 bool Crtc6845::cursor_immediate() const
 {
     bool cur = cursor_enabled_
@@ -264,9 +263,8 @@ bool Crtc6845::cursor_immediate() const
     return cur;
 }
 
-// --- Core stepping -----------------------------------------------------------------------------
+// Tick the CRTC
 // Returns (status_ptr, current_vma)
-
 std::pair<const Crtc6845::CrtcStatusBits*, uint16_t>
 Crtc6845::tick(const HBlankCallback& hblank_cb)
 {
@@ -342,7 +340,6 @@ Crtc6845::tick(const HBlankCallback& hblank_cb)
 
     if ((hcc_c0_ == (reg_[0] + 1)) && in_last_vblank_line_) {
         // Right before the new frame begins, draw one char of border.
-        // (In Rust you do this at c0 == r0; here we keep the intent.)
         // When we roll to +1 we clear vblank soon after.
     }
 

@@ -9,7 +9,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}" CACHE INTERNAL "")
 
 # Declare the project
-project(sdl-min)
+project(littleblue)
 
 if (APPLE OR EMSCRIPTEN)
     set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "")    # Disable shared builds on platforms where it does not make sense to use them
@@ -26,7 +26,7 @@ set(EXECUTABLE_NAME ${PROJECT_NAME})
 
 add_executable(${EXECUTABLE_NAME})
 
-target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core  ${CMAKE_SOURCE_DIR}/src/alfe)
+target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
 
 # Add your sources to the target
 target_sources(${EXECUTABLE_NAME} 
@@ -63,6 +63,9 @@ target_sources(${EXECUTABLE_NAME}
         src/gui/StackViewerWindow.h
         src/gui/VideoCardStatusWindow.cpp
         src/gui/VideoCardStatusWindow.h
+        src/gui/PicStatusWindow.cpp
+        src/gui/DmacStatusWindow.cpp
+        src/gui/DisplayDebugWindow.cpp
 )
 
 # Set C++ version

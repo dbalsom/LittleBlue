@@ -1,13 +1,53 @@
-#ifndef DMAC_H
-#define DMAC_H
+#pragma once
+
+#include <cstdint>
+#include <array>
 
 class DMAC
 {
 public:
-    void reset()
+    // Snapshot types for debugging: lightweight copies of channel state and top-level registers.
+    struct ChannelSnapshot
     {
-        for (int i = 0; i < 4; ++i)
-            _channels[i].reset();
+        uint16_t baseAddress{};
+        uint16_t baseWordCount{};
+        uint16_t currentAddress{};
+        uint16_t currentWordCount{};
+        uint8_t mode{};
+    };
+
+    struct DMADebugStatus
+    {
+        std::array<ChannelSnapshot, 4> channels{};
+        uint8_t status{};
+        uint8_t command{};
+        uint8_t request{};
+        uint8_t mask{};
+        uint8_t ack{};
+    };
+
+    [[nodiscard]] DMADebugStatus getDMADebugStatus() const {
+        DMADebugStatus s;
+        for (int i = 0; i < 4; ++i) {
+            const auto& c = _channels[i];
+            s.channels[i].baseAddress = c._baseAddress;
+            s.channels[i].baseWordCount = c._baseWordCount;
+            s.channels[i].currentAddress = c._currentAddress;
+            s.channels[i].currentWordCount = c._currentWordCount;
+            s.channels[i].mode = c._mode;
+        }
+        s.status = _status;
+        s.command = _command;
+        s.request = _request;
+        s.mask = _mask;
+        s.ack = _channel == -1 ? 0x00 : 0x01 << _channel;
+        return s;
+    }
+
+    void reset() {
+        for (auto& channel : _channels) {
+            channel.reset();
+        }
         _temporaryAddress = 0;
         _temporaryWordCount = 0;
         _status = 0;
@@ -15,86 +55,117 @@ public:
         _temporary = 0;
         _mask = 0xf;
         _request = 0;
-        _high = false;
+        _ack = 0;
+        _flipFlop = false;
         _channel = -1;
         _needHighAddress = true;
     }
-    void write(int address, uint8_t data)
-    {
+
+    void write(const uint32_t address, const uint8_t data) {
         switch (address) {
-            case 0x00: case 0x02: case 0x04: case 0x06:
-                _channels[(address & 6) >> 1].setAddress(_high, data);
-                _high = !_high;
+            case 0x00:
+            case 0x02:
+            case 0x04:
+            case 0x06:
+                _channels[(address & 6) >> 1].setAddress(_flipFlop, data);
+                _flipFlop = !_flipFlop;
                 break;
-            case 0x01: case 0x03: case 0x05: case 0x07:
-                _channels[(address & 6) >> 1].setCount(_high, data);
-                _high = !_high;
+            case 0x01:
+            case 0x03:
+            case 0x05:
+            case 0x07:
+                _channels[(address & 6) >> 1].setCount(_flipFlop, data);
+                _flipFlop = !_flipFlop;
                 break;
-            case 0x08:  // Write Command Register
+            case 0x08:
+                // Write Command Register
                 _command = data;
                 break;
-            case 0x09:  // Write Request Register
+            case 0x09:
+                // Write Request Register
                 setRequest(data & 3, (data & 4) != 0);
                 break;
-            case 0x0a:  // Write Single Mask Register Bit
-                {
-                    uint8_t b = 1 << (data & 3);
-                    if ((data & 4) != 0)
-                        _mask |= b;
-                    else
-                        _mask &= ~b;
-                }
-                break;
-            case 0x0b:  // Write Mode Register
+            case 0x0a:
+                // Write Single Mask Register Bit
+            {
+                uint8_t b = 1 << (data & 3);
+                if ((data & 4) != 0)
+                    _mask |= b;
+                else
+                    _mask &= ~b;
+            }
+            break;
+            case 0x0b:
+                // Write Mode Register
                 _channels[data & 3]._mode = data;
                 break;
-            case 0x0c:  // Clear Byte Pointer Flip/Flop
-                _high = false;
+            case 0x0c:
+                // Clear Byte Pointer Flip/Flop
+                _flipFlop = false;
                 break;
-            case 0x0d:  // Master Clear
+            case 0x0d:
+                // Master Clear
                 reset();
                 break;
-            case 0x0e:  // Clear Mask Register
+            case 0x0e:
+                // Clear Mask Register
                 _mask = 0;
                 break;
-            case 0x0f:  // Write All Mask Register Bits
+            case 0x0f:
+                // Write All Mask Register Bits
                 _mask = data;
+                break;
+            default:
                 break;
         }
     }
-    uint8_t read(int address)
-    {
+
+    uint8_t read(const uint32_t address) {
         switch (address) {
-            case 0x00: case 0x02: case 0x04: case 0x06:
-                _high = !_high;
-                return _channels[(address & 6) >> 1].getAddress(!_high);
-            case 0x01: case 0x03: case 0x05: case 0x07:
-                _high = !_high;
-                return _channels[(address & 6) >> 1].getCount(!_high);
-            case 0x08:  // Read Status Register
+            case 0x00:
+            case 0x02:
+            case 0x04:
+            case 0x06:
+                _flipFlop = !_flipFlop;
+                return _channels[(address & 6) >> 1].getAddress(!_flipFlop);
+            case 0x01:
+            case 0x03:
+            case 0x05:
+            case 0x07:
+                _flipFlop = !_flipFlop;
+                return _channels[(address & 6) >> 1].getCount(!_flipFlop);
+            case 0x08:
+                // Read Status Register
                 return _status;
-                break;
-            case 0x0d:  // Read Temporary Register
+            case 0x0d:
+                // Read Temporary Register
                 return _temporary;
-                break;
-            default:  // Illegal
+            default:
+                // Illegal
                 return 0xff;
         }
     }
-    void setDMARequestLine(int line, bool state)
-    {
+
+    void setDMARequestLine(int line, bool state) {
         setRequest(line, state != dreqSenseActiveLow());
     }
-    bool getHoldRequestLine()
-    {
-        if (_channel != -1)
+
+    [[nodiscard]] uint8_t getRequestLines() const {
+        return _request;
+    }
+
+    bool getHoldRequestLine() {
+        if (_channel != -1) {
             return true;
-        if (disabled())
+        }
+        if (disabled()) {
             return false;
+        }
         for (int i = 0; i < 4; ++i) {
             int channel = i;
-            if (rotatingPriority())
+            if (rotatingPriority()) {
                 channel = (channel + _priorityChannel) & 3;
+            }
             if ((_request & (1 << channel)) != 0) {
                 _channel = channel;
                 _priorityChannel = (channel + 1) & 3;
@@ -103,31 +174,82 @@ public:
         }
         return false;
     }
-    void dmaCompleted() { _channel = -1; }
-    uint8_t dmaRead()
-    {
-        if (memoryToMemory() && _channel == 1)
+
+    void dmaCompleted() {
+        _channel = -1;
+    }
+
+    uint8_t dmaRead() {
+        if (memoryToMemory() && _channel == 1) {
             return _temporary;
+        }
         return 0xff;
     }
-    void dmaWrite(uint8_t data)
-    {
-        if (memoryToMemory() && _channel == 0)
+
+    void dmaWrite(const uint8_t data) {
+        if (memoryToMemory() && _channel == 0) {
             _temporary = data;
+        }
     }
-    uint16_t address()
-    {
-        uint16_t address = _channels[_channel]._currentAddress;
-        _channels[_channel].incrementAddress();
+
+    bool isReading() {
+        if (_channel > 0) {
+            auto& c = _channels[_channel & 3];
+
+            return c.read();
+        }
+        return false;
+    }
+
+    bool isWriting() {
+        if (_channel > 0) {
+            auto& c = _channels[_channel & 3];
+
+            return c.write();
+        }
+        return false;
+    }
+
+    [[nodiscard]] uint16_t address() const {
+        if (_channel == -1) {
+            return 0;
+        }
+        const uint16_t address = _channels[_channel]._currentAddress;
         return address;
     }
-    int channel() { return _channel; }
+
+    uint16_t service() {
+        if (_channel == -1) {
+            return 0;
+        }
+        auto& c = _channels[_channel & 3];
+
+        if (!c.terminalCount() || c.autoinitializate()) {
+            c.incrementAddress();
+        }
+        if (c.terminalCount()) {
+            _status |= 0x01 << _channel;
+        }
+
+        return c._currentAddress;
+    }
+
+    [[nodiscard]] bool terminalCount() const {
+        if (_channel == -1) {
+            return false;
+        }
+        return _channels[_channel & 3].terminalCount();
+    }
+
+    [[nodiscard]] int channel() const {
+        return _channel;
+    }
+
 private:
     struct Channel
     {
-        void setAddress(bool high, uint8_t data)
-        {
-            if (high) {
+        void setAddress(const bool high, const uint8_t data) {
+            if (!high) {
                 _baseAddress = (_baseAddress & 0xff00) + data;
                 _currentAddress = (_currentAddress & 0xff00) + data;
             }
@@ -136,9 +258,10 @@ private:
                 _currentAddress = (_currentAddress & 0xff) + (data << 8);
             }
         }
-        void setCount(bool high, uint8_t data)
-        {
-            if (high) {
+
+        void setCount(const bool high, uint8_t data) {
+            _tc = false;
+            if (!high) {
                 _baseWordCount = (_baseWordCount & 0xff00) + data;
                 _currentWordCount = (_currentWordCount & 0xff00) + data;
             }
@@ -147,51 +270,71 @@ private:
                 _currentWordCount = (_currentWordCount & 0xff) + (data << 8);
             }
         }
-        uint8_t getAddress(bool high)
-        {
-            if (high)
+
+        [[nodiscard]] uint8_t getAddress(const bool high) const {
+            if (high) {
                 return _currentAddress >> 8;
-            else
-                return _currentAddress & 0xff;
+            }
+            return _currentAddress & 0xff;
         }
-        uint8_t getCount(bool high)
-        {
-            if (high)
+
+        [[nodiscard]] uint8_t getCount(const bool high) const {
+            if (high) {
                 return _currentWordCount >> 8;
-            else
-                return _currentWordCount & 0xff;
+            }
+            return _currentWordCount & 0xff;
         }
-        void reset()
-        {
+
+        void reset() {
             _baseAddress = 0;
             _baseWordCount = 0;
             _currentAddress = 0;
             _currentWordCount = 0;
             _mode = 0;
         }
-        void incrementAddress()
-        {
-            if (!addressDecrement())
+
+        void incrementAddress() {
+            if (!addressDecrement()) {
                 ++_currentAddress;
-            else
+            }
+            else {
                 --_currentAddress;
+            }
             --_currentWordCount;
+            if (_currentWordCount == 0xFFFF) {
+                // We allow the word count to roll over because we do a transfer on a 0 count.
+                // We've hit terminal count at this point.
+                _tc = true;
+
+                // Now we just need to handle autoinitialization, or reset the word count to 0.
+                if (autoinitializate()) {
+                    // It may seem counterintuitive, but the TC flag is not reset by auto-initialization.
+                    _currentAddress = _baseAddress;
+                    _currentWordCount = _baseWordCount;
+                }
+                else {
+                    _currentWordCount = 0;
+                }
+            }
         }
-        bool write() { return (_mode & 0x0c) == 4; }
-        bool read() { return (_mode & 0x0c) == 8; }
-        bool verify() { return (_mode & 0x0c) == 0; }
-        bool autoinitialization() { return (_mode & 0x10) != 0; }
-        bool addressDecrement() { return (_mode & 0x20) != 0; }
-        bool demand() { return (_mode & 0xc0) == 0x00; }
-        bool single() { return (_mode & 0xc0) == 0x40; }
-        bool block() { return (_mode & 0xc0) == 0x80; }
-        bool cascade() { return (_mode & 0xc0) == 0xc0; }
+
+        [[nodiscard]] bool write() const { return (_mode & 0x0c) == 4; }
+        [[nodiscard]] bool read() const { return (_mode & 0x0c) == 8; }
+        [[nodiscard]] bool verify() const { return (_mode & 0x0c) == 0; }
+        [[nodiscard]] bool autoinitializate() const { return (_mode & 0x10) != 0; }
+        [[nodiscard]] bool addressDecrement() const { return (_mode & 0x20) != 0; }
+        [[nodiscard]] bool demand() const { return (_mode & 0xc0) == 0x00; }
+        [[nodiscard]] bool single() const { return (_mode & 0xc0) == 0x40; }
+        [[nodiscard]] bool block() const { return (_mode & 0xc0) == 0x80; }
+        [[nodiscard]] bool cascade() const { return (_mode & 0xc0) == 0xc0; }
+        [[nodiscard]] bool terminalCount() const { return _tc; }
 
         uint16_t _baseAddress;
         uint16_t _baseWordCount;
         uint16_t _currentAddress;
         uint16_t _currentWordCount;
-        uint8_t _mode;  // Only 6 bits used
+        uint8_t _mode; // Only 6 bits used
+        bool _tc = false;
     };
 
     bool memoryToMemory() { return (_command & 1) != 0; }
@@ -200,12 +343,14 @@ private:
     bool compressedTiming() { return (_command & 8) != 0; }
     bool rotatingPriority() { return (_command & 0x10) != 0; }
     bool extendedWriteSelection() { return (_command & 0x20) != 0; }
+
+
     bool dreqSenseActiveLow() { return (_command & 0x40) != 0; }
     bool dackSenseActiveHigh() { return (_command & 0x80) != 0; }
-    void setRequest(int line, bool active)
-    {
-        uint8_t b = 1 << line;
-        uint8_t s = 0x10 << line;
+
+    void setRequest(const int line, const bool active) {
+        const uint8_t b = 1 << line;
+        const uint8_t s = 0x10 << line;
         if (active) {
             _request |= b;
             _status |= s;
@@ -216,18 +361,17 @@ private:
         }
     }
 
-    Channel _channels[4];
-    uint16_t _temporaryAddress;
-    uint16_t _temporaryWordCount;
-    uint8_t _status;
-    uint8_t _command;
-    uint8_t _temporary;
-    uint8_t _mask;  // Only 4 bits used
-    uint8_t _request;  // Only 4 bits used
-    bool _high;
-    int _channel;
-    int _priorityChannel;
-    bool _needHighAddress;
+    Channel _channels[4] = {};
+    uint16_t _temporaryAddress = 0;
+    uint16_t _temporaryWordCount = 0;
+    uint8_t _status = 0;
+    uint8_t _command = 0;
+    uint8_t _temporary = 0;
+    uint8_t _mask = 0; // Only 4 bits used
+    uint8_t _request = 0; // Only 4 bits used
+    uint8_t _ack = 0; // Only 4 bits used
+    bool _flipFlop = false;
+    int _channel = 0;
+    int _priorityChannel = 0;
+    bool _needHighAddress = false;
 };
-
-#endif //DMAC_H

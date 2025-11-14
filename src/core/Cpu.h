@@ -16,7 +16,8 @@
 
 #define LINE_ENDING_SIZE 1
 
-enum class Register : size_t {
+enum class Register : size_t
+{
     ES,
     CS,
     SS,
@@ -31,7 +32,7 @@ enum class Register : size_t {
     R11,
     TMPA,
     TMPB,
-    R14,
+    TMPC,
     FLAGS,
     R16,
     R17,
@@ -57,39 +58,59 @@ constexpr size_t reg_to_idx(Register r) {
 
 class Cpu
 {
-    enum {
-        groupMemory                     = 1,
-        groupInitialEARead              = 2,
+    enum
+    {
+        groupMemory = 1,
+        groupInitialEARead = 2,
         groupMicrocodePointerFromOpcode = 4,
-        groupNonPrefix                  = 8,
-        groupEffectiveAddress           = 0x10,
-        groupAddSubBooleanRotate        = 0x20,
-        groupNonFlagSet                 = 0x40,
-        groupMNotAccumulator            = 0x80,
-        groupNonSegregEA                = 0x100,
-        groupNoDirectionBit             = 0x200,
-        groupMicrocoded                 = 0x400,
-        groupNoWidthInOpcodeBit0        = 0x800,
-        groupByteOrWordAccess           = 0x1000,
-        groupF1ZZFromPrefix             = 0x2000,
-        groupIncDec                     = 0x4000,
+        groupNonPrefix = 8,
+        groupEffectiveAddress = 0x10,
+        groupAddSubBooleanRotate = 0x20,
+        groupNonFlagSet = 0x40,
+        groupMNotAccumulator = 0x80,
+        groupNonSegregEA = 0x100,
+        groupNoDirectionBit = 0x200,
+        groupMicrocoded = 0x400,
+        groupNoWidthInOpcodeBit0 = 0x800,
+        groupByteOrWordAccess = 0x1000,
+        groupF1ZZFromPrefix = 0x2000,
+        groupIncDec = 0x4000,
 
-        groupLoadRegisterImmediate      = 0x10000,
-        groupWidthInOpcodeBit3          = 0x20000,
-        groupCMC                        = 0x40000,
-        groupHLT                        = 0x80000,
-        groupREP                        = 0x100000,
-        groupSegmentOverride            = 0x200000,
-        groupLOCK                       = 0x400000,
-        groupCLI                        = 0x800000,
-        groupLoadSegmentRegister        = 0x1000000,
+        groupLoadRegisterImmediate = 0x10000,
+        groupWidthInOpcodeBit3 = 0x20000,
+        groupCMC = 0x40000,
+        groupHLT = 0x80000,
+        groupREP = 0x100000,
+        groupSegmentOverride = 0x200000,
+        groupLOCK = 0x400000,
+        groupCLI = 0x800000,
+        groupLoadSegmentRegister = 0x1000000,
     };
-public:
 
+public:
     enum class RunResult { Ok, Halt, BreakpointHit };
 
-    Cpu() : _consoleLogging(false), _bus()
+    enum MicrocodeState
     {
+        stateRunning,
+        stateWaitingForQueueData,
+        stateWaitingForQueueIdle,
+        stateIODelay2,
+        stateIODelay1,
+        stateWaitingUntilFirstByteCanStart,
+        stateWaitingUntilFirstByteDone,
+        stateWaitingUntilSecondByteDone,
+        stateSingleCycleWait,
+        stateHaltingStart,
+        stateHalting3,
+        stateHalting2,
+        stateHalting1,
+        stateHalted,
+        stateSuspending,
+    };
+
+    Cpu() :
+        _consoleLogging(false), _bus() {
         _logStartCycle = 0;
         _logEndCycle = 100;
 
@@ -99,7 +120,7 @@ public:
         _registers[24] = 0x100;
         auto byteData = reinterpret_cast<uint8_t*>(&_registers[24]);
         int bigEndian = *byteData;
-        for (int i = 0 ; i < 8; ++i) {
+        for (int i = 0; i < 8; ++i) {
             int byteNumbers[8] = {0, 2, 4, 6, 1, 3, 5, 7};
             // The index will be XOR'd with either 0 (little-endian) or 1 (big-endian) to flip the byte order
             // if required.
@@ -116,7 +137,7 @@ public:
 
         // Initialize an array to hold the 512 21-bit microcode instruction words.
         uint32_t instructions[512];
-        for (unsigned int & instruction : instructions) {
+        for (unsigned int& instruction : instructions) {
             instruction = 0;
         }
 
@@ -141,8 +162,7 @@ public:
                     // Instruction base row index (24 rows per block).
                     int ib = y * 24 + yy;
                     // Iterate through the width of the ROM block (64).
-                    for (int xx = 0; xx < 64; ++xx)
-                    {
+                    for (int xx = 0; xx < 64; ++xx) {
                         int b = s[yy * (64 + LINE_ENDING_SIZE) + (63 - xx)] == '0' ? 1 : 0;
                         instructions[xx * 8 + half * 4 + yy % 4] |= (b << (20 - (ib >> 2)));
                     }
@@ -181,7 +201,7 @@ public:
             }
 
             // This array provides the X bit position offset for each group.
-            int xx[9] = { 0, 8, 24, 40, 56, 72, 88, 104, 120 };
+            int xx[9] = {0, 8, 24, 40, 56, 72, 88, 104, 120};
             int xp = xx[g];
 
             // Iterate through top and bottom halves of each ROM file.
@@ -205,7 +225,7 @@ public:
 
         // Unpack the stage1 data into a more usable format.
         for (int i = 0; i < 2048; ++i) {
-            static const int ba[] = { 7, 2, 1, 0, 5, 6, 8, 9, 10, 3, 4 };
+            static const int ba[] = {7, 2, 1, 0, 5, 6, 8, 9, 10, 3, 4};
 
             // Scan through the decoder
             for (int j = 0; j < 128; ++j) {
@@ -308,7 +328,7 @@ public:
                 }
             }
         }
-        static const int groupYY[18] = { 1, 0, 3, 2, 4, 6, 5, 7, 11, 10, 12, 13, 8, 9, 15, 14, 16, 17 };
+        static const int groupYY[18] = {1, 0, 3, 2, 4, 6, 5, 7, 11, 10, 12, 13, 8, 9, 15, 14, 16, 17};
         for (int x = 0; x < 34; ++x) {
             if (x == 11) {
                 continue;
@@ -317,8 +337,8 @@ public:
             for (int i = 0; i < 0x101; ++i) {
                 bool found = true;
                 for (int j = 0; j < 9; ++j) {
-                    int y0 = groupInput[groupYY[j*2] * 38 + x];
-                    int y1 = groupInput[groupYY[j*2 + 1] * 38 + x];
+                    int y0 = groupInput[groupYY[j * 2] * 38 + x];
+                    int y1 = groupInput[groupYY[j * 2 + 1] * 38 + x];
                     int b = (i >> j) & 1;
                     if ((y0 == 1 && b == 1) || (y1 == 1 && b == 0)) {
                         found = false;
@@ -369,12 +389,15 @@ public:
         _microcodePointer = 0;
         _microcodeReturn = 0;
     }
-    Bus *getBus() { return &_bus; }
+
+    MicrocodeState getMCState() const { return _state; }
+    Bus* getBus() { return &_bus; }
     uint8_t getALU() const { return _alu; }
     uint8_t* getRAM() { return _bus.ram(); }
     uint16_t* getMainRegisters() { return &_registers[24]; }
     uint16_t* getRegisters() { return &_registers[0]; }
     void stubInit() { _bus.stubInit(); }
+
     void setExtents(int logStartCycle, int logEndCycle, int executeEndCycle, int stopIP, int stopSeg) {
         _logStartCycle = logStartCycle + 4;
         _logEndCycle = logEndCycle;
@@ -382,24 +405,26 @@ public:
         _stopIP = stopIP;
         _stopSeg = stopSeg;
     }
+
     void setInitialIP(int v) { ip() = v; }
     [[nodiscard]] uint64_t cycle() const { return _cycle >= 11 ? _cycle - 11 : 0; }
+
     [[nodiscard]] std::string log() const {
         // Assemble buffered lines into a single string on request
         std::string out;
-        for (const auto &s : _logBuffer) {
+        for (const auto& s : _logBuffer) {
             out += s;
         }
         return out;
-     }
+    }
 
     void reset() {
-        _bus.reset();
+        //_bus.reset();
 
-        for (unsigned short & _register : _registers) {
+        for (unsigned short& _register : _registers) {
             _register = 0;
         }
-        _registers[1] = 0xFFFF;  // RC (CS)
+        _registers[1] = 0xFFFF; // RC (CS)
         _registers[21] = 0xFFFF; // ONES
         _registers[15] = 2; // FLAGS
 
@@ -443,7 +468,7 @@ public:
         // Clear the breakpoint status if we're being asked to run again
         _breakpointHit = false;
 
-        for (int i = 0 ; i < cycleCt; i++) {
+        for (int i = 0; i < cycleCt; i++) {
             simulateCycle();
 
             // If we've reached an instruction boundary this cycle, check the breakpoint
@@ -457,7 +482,7 @@ public:
 
             if (_breakpointHit) {
                 // Stop executing further cycles if a breakpoint was hit by other means
-               return RunResult::BreakpointHit;
+                return RunResult::BreakpointHit;
             }
         }
 
@@ -467,8 +492,10 @@ public:
     void run() {
         do {
             simulateCycle();
-        } while ((getRealIP() != _stopIP + 2 || cs() != _stopSeg) && _cycle < _executeEndCycle);
+        }
+        while ((getRealIP() != _stopIP + 2 || cs() != _stopSeg) && _cycle < _executeEndCycle);
     }
+
     void setConsoleLogging() {
         _consoleLogging = true;
     }
@@ -487,7 +514,8 @@ public:
             simulateCycle();
             ++cycles;
             // Prevent infinite loop in funky situations by limiting cycles
-            if (cycles > 1000000) break;
+            if (cycles > 1000000)
+                break;
         }
         return cycles;
     }
@@ -497,22 +525,24 @@ public:
 
     // Breakpoint API
     void setBreakpoint(uint16_t cs, uint16_t ip) {
-         _breakpoint_cs = cs;
-         _breakpoint_ip = ip;
-         _hasBreakpoint = true;
-         _breakpointHit = false;
+        _breakpoint_cs = cs;
+        _breakpoint_ip = ip;
+        _hasBreakpoint = true;
+        _breakpointHit = false;
     }
+
     void clearBreakpoint() {
-         _hasBreakpoint = false;
-         _breakpointHit = false;
+        _hasBreakpoint = false;
+        _breakpointHit = false;
     }
+
     bool hasBreakpoint() const { return _hasBreakpoint; }
     bool breakpointHit() const { return _breakpointHit; }
     uint16_t breakpointCS() const { return _breakpoint_cs; }
     uint16_t breakpointIP() const { return _breakpoint_ip; }
     void clearBreakpointHit() { _breakpointHit = false; }
-private:
 
+private:
     enum IOType
     {
         ioInterruptAcknowledge = 0,
@@ -531,13 +561,13 @@ private:
         }
     }
 
-    uint8_t queueRead()
-    {
+    uint8_t queueRead() {
         const uint8_t q = _queue & 0xff;
         _dequeueing = true;
         _snifferDecoder.queueOperation(3);
         return q;
     }
+
     [[nodiscard]] int modRMReg() const { return (_modRM >> 3) & 7; }
     [[nodiscard]] int modRMReg2() const { return _modRM & 7; }
     uint16_t& rw(int r) { return _registers[24 + r]; }
@@ -569,8 +599,8 @@ private:
     uint8_t& modRMRB() { return rb(modRMReg()); }
     uint16_t& modRMRW2() { return rw(modRMReg2()); }
     uint8_t& modRMRB2() { return rb(modRMReg2()); }
-    uint16_t getMemOrReg(bool mem)
-    {
+
+    uint16_t getMemOrReg(bool mem) {
         if (mem) {
             if (_useMemory) {
                 return opr();
@@ -593,8 +623,8 @@ private:
         }
         return modRMRW();
     }
-    void setMemOrReg(bool mem, uint16_t v)
-    {
+
+    void setMemOrReg(bool mem, uint16_t v) {
         if (mem) {
             if (_useMemory) {
                 opr() = v;
@@ -622,8 +652,8 @@ private:
             }
         }
     }
-    void startInstruction()
-    {
+
+    void startInstruction() {
         if ((_group & groupNonPrefix) != 0) {
             _segmentOverride = -1;
             _f1 = false;
@@ -636,8 +666,8 @@ private:
         _opcode = _nextMicrocodePointer >> 4;
         _group = _nextGroup;
     }
-    void startMicrocodeInstruction()
-    {
+
+    void startMicrocodeInstruction() {
         _loaderState = 2;
         startInstruction();
         _microcodePointer = _nextMicrocodePointer;
@@ -646,9 +676,9 @@ private:
             _wordSize = false;
         }
         if ((_group & groupByteOrWordAccess) == 0) {
-            _wordSize = false;  // Just for XLAT
+            _wordSize = false; // Just for XLAT
         }
-        _carry = cf();  // Just for SALC
+        _carry = cf(); // Just for SALC
         _overflow = of(); // Not sure if the other flags work the same
         _parity = pf() ? 0x40 : 0;
         _sign = sf();
@@ -681,8 +711,8 @@ private:
             }
         }
     }
-    void startNonMicrocodeInstruction()
-    {
+
+    void startNonMicrocodeInstruction() {
         _loaderState = 0;
         startInstruction();
         if ((_group & groupLOCK) != 0) {
@@ -699,7 +729,8 @@ private:
             _rni = false;
             _nx = false;
             _state = stateHaltingStart;
-            _extraHaltDelay = !((_busState == tIdle && !_t5 && !_t6 && _ioType == ioPassive) || (_t5 && _lastIOType != ioPrefetch));
+            _extraHaltDelay = !((_busState == tIdle && !_t5 && !_t6 && _ioType == ioPassive) || (_t5 && _lastIOType !=
+                ioPrefetch));
             return;
         }
         if ((_group & groupCMC) != 0) {
@@ -725,20 +756,26 @@ private:
         }
     }
 
-    uint16_t doRotate(uint16_t v, uint16_t a, bool carry)
-    {
+    uint16_t doRotate(uint16_t v, uint16_t a, bool carry) {
         _carry = carry;
         _overflow = topBit(v ^ a);
         return v;
     }
-    uint16_t doShift(uint16_t v, uint16_t a, bool carry, bool auxiliary)
-    {
+
+    uint16_t doShift(uint16_t v, uint16_t a, bool carry, bool auxiliary) {
         _auxiliary = auxiliary;
         doPZS(v);
         return doRotate(v, a, carry);
     }
-    uint16_t doALU()
-    {
+
+    uint16_t doPass(uint16_t v) {
+        _auxiliary = false;
+        doPZS(v);
+        _zero = v == 0;
+        return v;
+    }
+
+    uint16_t doALU() {
         uint16_t t;
         bool oldAF;
         uint32_t a = _registers[_aluInput + 12], v;
@@ -773,7 +810,8 @@ private:
             case 0x0f: // SAR
                 return doShift(((a & wordMask()) >> 1) | topBit(topBit(a)), a, lowBit(a), (a & 0x20) != 0);
             case 0x10: // PASS
-                return doShift(a, a, false, false);
+                //return doShift(a, a, false, false);
+                return doPass(a);
             case 0x14: // DAA
                 oldAF = _auxiliary;
                 t = a;
@@ -845,36 +883,18 @@ private:
         }
         return v;
     }
-    enum MicrocodeState
-    {
-        stateRunning,
-        stateWaitingForQueueData,
-        stateWaitingForQueueIdle,
-        stateIODelay2,
-        stateIODelay1,
-        stateWaitingUntilFirstByteCanStart,
-        stateWaitingUntilFirstByteDone,
-        stateWaitingUntilSecondByteDone,
-        stateSingleCycleWait,
-        stateHaltingStart,
-        stateHalting3,
-        stateHalting2,
-        stateHalting1,
-        stateHalted,
-        stateSuspending,
-    };
-    uint32_t readSource()
-    {
+
+    uint32_t readSource() {
         uint32_t v;
         switch (_source) {
-            case 7:  // Q
+            case 7: // Q
                 if (_queueBytes == 0) {
                     _state = stateWaitingForQueueData;
                     return 0;
                 }
                 return queueRead();
-            case 8:  // A (AL)
-            case 9:  // C (CL)? - not used
+            case 8: // A (AL)
+            case 9: // C (CL)? - not used
             case 10: // E (DL)? - not used
             case 11: // L (BL)? - not used
                 return rb(_source & 3);
@@ -906,11 +926,11 @@ private:
         }
         return _registers[_source];
     }
-    void writeDestination(uint32_t v)
-    {
+
+    void writeDestination(uint32_t v) {
         switch (_destination) {
-            case 8:  // A (AL)
-            case 9:  // C (CL)? - not used
+            case 8: // A (AL)
+            case 9: // C (CL)? - not used
             case 10: // E (DL)? - not used
             case 11: // L (BL)? - not used
                 rb(_destination & 3) = v;
@@ -976,8 +996,8 @@ private:
 
         }
     }
-    void busAccessDone(uint8_t high)
-    {
+
+    void busAccessDone(uint8_t high) {
         opr() |= high << 8;
         if ((_operands & 0x10) != 0)
             _rni = true;
@@ -994,8 +1014,8 @@ private:
         }
         _state = stateRunning;
     }
-    void doSecondMisc()
-    {
+
+    void doSecondMisc() {
         switch (_operands & 7) {
             case 0: // RNI
                 if (!_skipRNI)
@@ -1025,8 +1045,8 @@ private:
                 break;
         }
     }
-    void startIO()
-    {
+
+    void startIO() {
         _state = stateIODelay1;
         if ((_busState == t3 || _busState == tWait) || canStartPrefetch())
             _state = stateIODelay2;
@@ -1034,8 +1054,8 @@ private:
             _ioType = ioPassive;
         _ioRequested = true;
     }
-    void doSecondHalf()
-    {
+
+    void doSecondHalf() {
         switch (_type) {
             case 0: // short jump
                 if (!condition(_operands >> 4))
@@ -1051,7 +1071,8 @@ private:
                     (_group & groupEffectiveAddress) != 0)
                     _nx = false;
                 _aluInput = (_operands >> 1) & 3;
-                if (_alu == 0x11) { // XI
+                if (_alu == 0x11) {
+                    // XI
                     _alu = ((((_opcode & 0x80) != 0 ? _modRM : _opcode) >> 3) & 7) |
                         ((_opcode >> 3) & 8) |
                         ((_group & groupAddSubBooleanRotate) != 0 ? 0 : 0x10);
@@ -1103,15 +1124,15 @@ private:
                     _microcodeReturn = _microcodePointer;
                 _microcodePointer = _translation[
                     ((_type & 2) << 6) +
-                        ((_operands << 3) & 0x78) +
-                        ((_group & groupInitialEARead) == 0 ? 4 : 0) +
-                        ((_modRM & 0xc0) == 0 ? 1 : 0)] >> 1;
+                    ((_operands << 3) & 0x78) +
+                    ((_group & groupInitialEARead) == 0 ? 4 : 0) +
+                    ((_modRM & 0xc0) == 0 ? 1 : 0)] >> 1;
                 _state = stateSingleCycleWait;
                 break;
         }
     }
-    void busStart()
-    {
+
+    void busStart() {
         bool memory = (_group & groupMemory) != 0;
         switch ((_operands >> 5) & 3) {
             case 0:
@@ -1128,8 +1149,8 @@ private:
                 break;
         }
     }
-    void executeMicrocode()
-    {
+
+    void executeMicrocode() {
         uint8_t* m;
         uint32_t v;
         switch (_state) {
@@ -1259,14 +1280,14 @@ private:
                 break;
         }
     }
-    void setNextMicrocode(int nextState, int nextMicrocode)
-    {
+
+    void setNextMicrocode(int nextState, int nextMicrocode) {
         _nextMicrocodePointer = nextMicrocode;
         _loaderState = nextState | 1;
         _nextGroup = _groups[nextMicrocode >> 4];
     }
-    void readOpcode(int nextState)
-    {
+
+    void readOpcode(int nextState) {
         if ((flags() & 0x100) != 0) {
             setNextMicrocode(nextState, 0x1000);
             return;
@@ -1287,16 +1308,17 @@ private:
         }
         _loaderState = nextState & 2;
     }
-    bool canStartPrefetch()
-    {
+
+    bool canStartPrefetch() {
         if (!_prefetching) // prefetching turned off for a jump?
             return false;
-        if (_ioRequested || _ioType != ioPassive || _t4)  // bus busy?
+        if (_ioRequested || _ioType != ioPassive || _t4) // bus busy?
             return false;
         if (_queueFilled)
             return false;
         return true;
     }
+
     enum BusState
     {
         t1,
@@ -1306,8 +1328,8 @@ private:
         t4,
         tIdle,
     };
-    BusState completeIO(bool write)
-    {
+
+    BusState completeIO(bool write) {
         if (!_ready)
             return tWait;
         if (!write) {
@@ -1322,8 +1344,8 @@ private:
         _ioType = ioPassive;
         return t4;
     }
-    void simulateCycle()
-    {
+
+    void simulateCycle() {
         BusState nextState = _busState;
         bool write = _ioType == ioWriteMemory || _ioType == ioWritePort;
         _t6 = _t5;
@@ -1371,7 +1393,7 @@ private:
             --_queueBytes;
         }
         //if (_cyclesUntilCanLowerQueueFilled == 0 || (_cyclesUntilCanLowerQueueFilled == 1 && _queueBytes < 3)) {
-            //_cyclesUntilCanLowerQueueFilled = 0;
+        //_cyclesUntilCanLowerQueueFilled = 0;
         if ((_queueBytes < 3 || (_busState == tIdle && (_lastIOType != ioPrefetch || (!_t4 && !_t5))))) {
             if (_busState == tIdle && !(_t4 && _lastIOType == ioPrefetch) && _queueBytes < 4)
                 _queueFilled = false;
@@ -1401,14 +1423,15 @@ private:
                         _bus.setLock(false);
                     }
                 }
-                if ((_nextGroup & groupMicrocoded) == 0)  // 1BL
+                if ((_nextGroup & groupMicrocoded) == 0) // 1BL
                     startNonMicrocodeInstruction();
                 else {
-                    if ((_nextGroup & groupEffectiveAddress) == 0)  // SC
+                    if ((_nextGroup & groupEffectiveAddress) == 0) // SC
                         startMicrocodeInstruction();
                     else {
                         _loaderState = 1;
-                        if (_queueBytes != 0) {  // SC
+                        if (_queueBytes != 0) {
+                            // SC
                             _nextModRM = queueRead();
                             startMicrocodeInstruction();
                         }
@@ -1492,47 +1515,49 @@ private:
         _interruptPending = _bus.interruptPending();
         _bus.tick();
     }
-    static std::string pad(const std::string& s, int n) {  return s + std::string(std::max(0, n - static_cast<int>(s.length())), ' '); }
 
-    std::string microcodeString()
-    {
+    static std::string pad(const std::string& s, int n) {
+        return s + std::string(std::max(0, n - static_cast<int>(s.length())), ' ');
+    }
+
+    std::string microcodeString() {
         if (_lastMicrocodePointer == -1) {
             return "";
         }
 
         static const char* regNames[] = {
-            "RA",  // ES
-            "RC",  // CS
-            "RS",  // SS - presumably, to fit pattern. Only used in RESET
-            "RD",  // DS
+            "RA", // ES
+            "RC", // CS
+            "RS", // SS - presumably, to fit pattern. Only used in RESET
+            "RD", // DS
             "PC",
             "IND",
             "OPR",
-            "no dest",  // as dest only - source is Q
-            "A",   // AL
-            "C",   // CL? - not used
-            "E",   // DL? - not used
-            "L",   // BL? - not used
+            "no dest", // as dest only - source is Q
+            "A", // AL
+            "C", // CL? - not used
+            "E", // DL? - not used
+            "L", // BL? - not used
             "tmpa",
             "tmpb",
             "tmpc",
-            "F",   // flags register
-            "X",   // AH
-            "B",   // CH? - not used
+            "F", // flags register
+            "X", // AH
+            "B", // CH? - not used
             "M",
-            "R",   // source specified by modrm and direction, destination specified by r field of modrm
-            "tmpaL",    // as dest only - source is SIGNA
-            "tmpbL",    // as dest only - source is ONES
-            "tmpaH",    // as dest only - source is CR
-            "tmpbH",    // as dest only - source is ZERO
-            "XA",  // AX
-            "BC",  // CX
-            "DE",  // DX
-            "HL",  // BX
-            "SP",  // SP
-            "MP",  // BP
-            "IJ",  // SI
-            "IK",  // DI
+            "R", // source specified by modrm and direction, destination specified by r field of modrm
+            "tmpaL", // as dest only - source is SIGNA
+            "tmpbL", // as dest only - source is ONES
+            "tmpaH", // as dest only - source is CR
+            "tmpbH", // as dest only - source is ZERO
+            "XA", // AX
+            "BC", // CX
+            "DE", // DX
+            "HL", // BX
+            "SP", // SP
+            "MP", // BP
+            "IJ", // SI
+            "IK", // DI
         };
         static const char* condNames[] = {
             "F1ZZ",
@@ -1550,7 +1575,7 @@ private:
             "NCY ",
             "F1  ",
             "INT ", // jump if interrupt is pending
-            "XC  ",  // jump if condition based on low 4 bits of opcode
+            "XC  ", // jump if condition based on low 4 bits of opcode
         };
         static const char* destNames[] = {
             "FARCALL ",
@@ -1569,8 +1594,10 @@ private:
             "CORD    ", // unsigned divide tmpa:tmpc by tmpb, quotient in ~tmpc, remainder in tmpa
             "PREIMUL ", // abs tmpc and tmpb, invert F1 if product negative
             "NEGATE  ", // negate product tmpa:tmpc
-            "IMULCOF ", // clear carry and overflow flags if product of signed multiply fits in low part, otherwise set them
-            "MULCOF  ", // clear carry and overflow flags if product of unsigned multiply fits in low part, otherwise set them
+            "IMULCOF ",
+            // clear carry and overflow flags if product of signed multiply fits in low part, otherwise set them
+            "MULCOF  ",
+            // clear carry and overflow flags if product of unsigned multiply fits in low part, otherwise set them
             "PREIDIV ", // abs tmpa:tmpc and tmpb, invert F1 if one or the other but not both were negative
             "POSTIDIV", // negate ~tmpc if F1 set
         };
@@ -1595,17 +1622,29 @@ private:
             t = 4;
             o = 0xfe;
         }
-        if (s == 0x15 && d == 0x07)  // "ONES  -> Q" used as no-op move
+        if (s == 0x15 && d == 0x07) // "ONES  -> Q" used as no-op move
             r += "                ";
         else {
             const char* source = regNames[s];
             switch (s) {
-                case 0x07: source = "Q"; break;
-                case 0x14: source = "SIGMA"; break;
-                case 0x15: source = "ONES"; break;
-                case 0x16: source = "CR"; break;  // low 3 bits of microcode address Counting Register + 1? Used as interrupt number at 0x198 (1), 0x199 (2), 0x1a7 (0), 0x1af (4), and 0x1b2 (3)
-                case 0x17: source = "ZERO"; break;
-                default: break;
+                case 0x07:
+                    source = "Q";
+                    break;
+                case 0x14:
+                    source = "SIGMA";
+                    break;
+                case 0x15:
+                    source = "ONES";
+                    break;
+                case 0x16:
+                    source = "CR";
+                    break;
+                // low 3 bits of microcode address Counting Register + 1? Used as interrupt number at 0x198 (1), 0x199 (2), 0x1a7 (0), 0x1af (4), and 0x1b2 (3)
+                case 0x17:
+                    source = "ZERO";
+                    break;
+                default:
+                    break;
             }
             r += pad(std::string(source), 5) + " -> " + pad(std::string(regNames[d]), 7);
         }
@@ -1616,7 +1655,8 @@ private:
         }
         else
             r += decimal(t) + "   ";
-        switch (t) {  // TYP bits
+        switch (t) {
+            // TYP bits
             case 0:
             case 5:
             case 7:
@@ -1634,83 +1674,187 @@ private:
                 break;
             case 4:
                 switch ((o >> 3) & 0x0f) {
-                    case 0x00: r += "MAXC "; break;
-                    case 0x01: r += "FLUSH"; break;
-                    case 0x02: r += "CF1  "; break;
-                    case 0x03: r += "CITF "; break;  // clear interrupt and trap flags
-                    case 0x04: r += "RCY  "; break;  // reset carry
-                    case 0x06: r += "CCOF "; break;  // clear carry and overflow
-                    case 0x07: r += "SCOF "; break;  // set carry and overflow
-                    case 0x08: r += "WAIT "; break;  // not sure what this does
-                    case 0x0f: r += "none "; break;
-                    default: break;
+                    case 0x00:
+                        r += "MAXC ";
+                        break;
+                    case 0x01:
+                        r += "FLUSH";
+                        break;
+                    case 0x02:
+                        r += "CF1  ";
+                        break;
+                    case 0x03:
+                        r += "CITF ";
+                        break; // clear interrupt and trap flags
+                    case 0x04:
+                        r += "RCY  ";
+                        break; // reset carry
+                    case 0x06:
+                        r += "CCOF ";
+                        break; // clear carry and overflow
+                    case 0x07:
+                        r += "SCOF ";
+                        break; // set carry and overflow
+                    case 0x08:
+                        r += "WAIT ";
+                        break; // not sure what this does
+                    case 0x0f:
+                        r += "none ";
+                        break;
+                    default:
+                        break;
                 }
                 r += " ";
                 switch (o & 7) {
-                    case 0: r += "RNI     "; break;
-                    case 1: r += "WB,NX   "; break;
-                    case 2: r += "CORR    "; break;
-                    case 3: r += "SUSP    "; break;
-                    case 4: r += "RTN     "; break;
-                    case 5: r += "NX      "; break;
-                    case 7: r += "none    "; break;
-                    default: break;
+                    case 0:
+                        r += "RNI     ";
+                        break;
+                    case 1:
+                        r += "WB,NX   ";
+                        break;
+                    case 2:
+                        r += "CORR    ";
+                        break;
+                    case 3:
+                        r += "SUSP    ";
+                        break;
+                    case 4:
+                        r += "RTN     ";
+                        break;
+                    case 5:
+                        r += "NX      ";
+                        break;
+                    case 7:
+                        r += "none    ";
+                        break;
+                    default:
+                        break;
                 }
                 break;
             case 1:
                 switch ((o >> 3) & 0x1f) {
-                    case 0x00: r += "ADD "; break;
-                    case 0x02: r += "ADC "; break;
-                    case 0x04: r += "AND "; break;
-                    case 0x05: r += "SUBT"; break;
-                    case 0x0a: r += "LRCY"; break;
-                    case 0x0b: r += "RRCY"; break;
-                    case 0x10: r += "PASS"; break;
-                    case 0x11: r += "XI  "; break;
-                    case 0x18: r += "INC "; break;
-                    case 0x19: r += "DEC "; break;
-                    case 0x1a: r += "COM1"; break;
-                    case 0x1b: r += "NEG "; break;
-                    case 0x1c: r += "INC2"; break;
-                    case 0x1d: r += "DEC2"; break;
-                    default: break;
+                    case 0x00:
+                        r += "ADD ";
+                        break;
+                    case 0x02:
+                        r += "ADC ";
+                        break;
+                    case 0x04:
+                        r += "AND ";
+                        break;
+                    case 0x05:
+                        r += "SUBT";
+                        break;
+                    case 0x0a:
+                        r += "LRCY";
+                        break;
+                    case 0x0b:
+                        r += "RRCY";
+                        break;
+                    case 0x10:
+                        r += "PASS";
+                        break;
+                    case 0x11:
+                        r += "XI  ";
+                        break;
+                    case 0x18:
+                        r += "INC ";
+                        break;
+                    case 0x19:
+                        r += "DEC ";
+                        break;
+                    case 0x1a:
+                        r += "COM1";
+                        break;
+                    case 0x1b:
+                        r += "NEG ";
+                        break;
+                    case 0x1c:
+                        r += "INC2";
+                        break;
+                    case 0x1d:
+                        r += "DEC2";
+                        break;
+                    default:
+                        break;
                 }
                 r += "  ";
                 switch (o & 7) {
-                    case 0: r += "tmpa    "; break;
-                    case 1: r += "tmpa, NX"; break;
-                    case 2: r += "tmpb    "; break;
-                    case 3: r += "tmpb, NX"; break;
-                    case 4: r += "tmpc    "; break;
-                    default: break;
+                    case 0:
+                        r += "tmpa    ";
+                        break;
+                    case 1:
+                        r += "tmpa, NX";
+                        break;
+                    case 2:
+                        r += "tmpb    ";
+                        break;
+                    case 3:
+                        r += "tmpb, NX";
+                        break;
+                    case 4:
+                        r += "tmpc    ";
+                        break;
+                    default:
+                        break;
                 }
                 break;
             case 6:
                 switch ((o >> 4) & 7) {
-                    case 0: r += "R    "; break;
-                    case 2: r += "IRQ  "; break;
-                    case 4: r += "w    "; break;
-                    case 5: r += "W,RNI"; break;
-                    default: break;
+                    case 0:
+                        r += "R    ";
+                        break;
+                    case 2:
+                        r += "IRQ  ";
+                        break;
+                    case 4:
+                        r += "w    ";
+                        break;
+                    case 5:
+                        r += "W,RNI";
+                        break;
+                    default:
+                        break;
                 }
                 r += " ";
-                switch ((o >> 2) & 3) {  // Bits 0 and 1 are segment
-                    case 0: r += "DA,"; break;  // ES
-                    case 1: r += "D0,"; break;  // segment 0
-                    case 2: r += "DS,"; break;  // SS
-                    case 3: r += "DD,"; break;  // DS
-                    default: break;
+                switch ((o >> 2) & 3) {
+                    // Bits 0 and 1 are segment
+                    case 0:
+                        r += "DA,";
+                        break; // ES
+                    case 1:
+                        r += "D0,";
+                        break; // segment 0
+                    case 2:
+                        r += "DS,";
+                        break; // SS
+                    case 3:
+                        r += "DD,";
+                        break; // DS
+                    default:
+                        break;
                 }
-                switch (o & 3) {  // bits 2 and 3 are IND update
-                    case 0: r += "P2"; break;  // Increment IND by 2
-                    case 1: r += "BL"; break;  // Adjust IND according to word size and DF
-                    case 2: r += "M2"; break;  // Decrement IND by 2
-                    case 3: r += "P0"; break;  // Don't adjust IND
-                    default: break;
+                switch (o & 3) {
+                    // bits 2 and 3 are IND update
+                    case 0:
+                        r += "P2";
+                        break; // Increment IND by 2
+                    case 1:
+                        r += "BL";
+                        break; // Adjust IND according to word size and DF
+                    case 2:
+                        r += "M2";
+                        break; // Decrement IND by 2
+                    case 3:
+                        r += "P0";
+                        break; // Don't adjust IND
+                    default:
+                        break;
                 }
                 r += "   ";
                 break;
-            default: break;
+            default:
+                break;
         }
         r += " ";
         if (f)
@@ -1731,8 +1875,7 @@ private:
         return r;
     }
 
-    bool condition(int n)
-    {
+    bool condition(int n) {
         switch (n) {
             case 0x00: // F1ZZ
                 if ((_group & groupF1ZZFromPrefix) != 0)
@@ -1745,14 +1888,14 @@ private:
                     return (_opcode & 8) == 0;
                 return !lowBit(_opcode) || (_opcode & 6) == 2;
             case 0x03: // Z
-                return _zero;
+                return _superZero;
             case 0x04: // NCZ
                 --_counter;
                 return _counter != -1;
             case 0x05: // TEST - no 8087 emulated yet
                 return true;
             case 0x06: // OF
-                return of();  // only used in INTO
+                return of(); // only used in INTO
             case 0x07: // CY
                 return _carry;
             case 0x08: // UNC
@@ -1760,7 +1903,7 @@ private:
             case 0x09: // NF1
                 return !_f1;
             case 0x0a: // NZ
-                return !_zero;
+                return !_superZero;
             case 0x0b: // X0
                 if ((_group & groupMicrocodePointerFromOpcode) == 0)
                     return (_modRM & 8) != 0;
@@ -1776,15 +1919,32 @@ private:
         }
         bool jump = false; // XC
         switch (_opcode & 0x0e) {
-            case 0x00: jump = of(); break;  // O
-            case 0x02: jump = cf(); break;  // C
-            case 0x04: jump = zf(); break;  // Z
-            case 0x06: jump = cf() || zf(); break;  // BE
-            case 0x08: jump = sf(); break;  // S
-            case 0x0a: jump = pf(); break;  // P
-            case 0x0c: jump = (sf() != of()); break;  // L
-            case 0x0e: jump = (sf() != of()) || zf(); break;  // LE
-            default: break;
+            case 0x00:
+                jump = of();
+                break; // O
+            case 0x02:
+                jump = cf();
+                break; // C
+            case 0x04:
+                jump = zf();
+                break; // Z
+            case 0x06:
+                jump = cf() || zf();
+                break; // BE
+            case 0x08:
+                jump = sf();
+                break; // S
+            case 0x0a:
+                jump = pf();
+                break; // P
+            case 0x0c:
+                jump = (sf() != of());
+                break; // L
+            case 0x0e:
+                jump = (sf() != of()) || zf();
+                break; // LE
+            default:
+                break;
         }
         if (lowBit(_opcode)) {
             jump = !jump;
@@ -1792,13 +1952,13 @@ private:
         return jump;
     }
 
-    bool interruptPending()
-    {
+    bool interruptPending() {
         return _nmiRequested || (intf() && _interruptPending);
     }
+
     uint16_t wordMask() { return _wordSize ? 0xffff : 0xff; }
-    void doPZS(uint16_t v)
-    {
+
+    void doPZS(uint16_t v) {
         static uint8_t table[0x100] = {
             4, 0, 0, 4, 0, 4, 4, 0, 0, 4, 4, 0, 4, 0, 0, 4,
             0, 4, 4, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0, 4, 4, 0,
@@ -1815,40 +1975,42 @@ private:
             4, 0, 0, 4, 0, 4, 4, 0, 0, 4, 4, 0, 4, 0, 0, 4,
             0, 4, 4, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0, 4, 4, 0,
             0, 4, 4, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0, 4, 4, 0,
-            4, 0, 0, 4, 0, 4, 4, 0, 0, 4, 4, 0, 4, 0, 0, 4 };
+            4, 0, 0, 4, 0, 4, 4, 0, 0, 4, 4, 0, 4, 0, 0, 4};
         _parity = table[v & 0xff];
         _zero = ((v & wordMask()) == 0);
+        _superZero = (v == 0);
         _sign = topBit(v);
     }
-    void doFlags(uint32_t result, bool of, bool af)
-    {
+
+    void doFlags(uint32_t result, bool of, bool af) {
         doPZS(result);
         _overflow = of;
         _auxiliary = af;
     }
-    uint16_t bitwise(uint16_t data)
-    {
+
+    uint16_t bitwise(uint16_t data) {
         doFlags(data, false, false);
         _carry = false;
         return data;
     }
-    void doAddSubFlags(uint32_t result, uint32_t x, bool of, bool af)
-    {
+
+    void doAddSubFlags(uint32_t result, uint32_t x, bool of, bool af) {
         doFlags(result, of, af);
         _carry = (((result ^ x) & (_wordSize ? 0x10000 : 0x100)) != 0);
     }
+
     bool lowBit(uint32_t v) { return (v & 1) != 0; }
     bool topBit(int w) { return (w & (_wordSize ? 0x8000 : 0x80)) != 0; }
     bool topBit(uint32_t w) { return (w & (_wordSize ? 0x8000 : 0x80)) != 0; }
     uint16_t topBit(bool v) { return v ? (_wordSize ? 0x8000 : 0x80) : 0; }
-    uint16_t add(uint32_t a, uint32_t b, bool c)
-    {
+
+    uint16_t add(uint32_t a, uint32_t b, bool c) {
         uint32_t r = a + b + (c ? 1 : 0);
         doAddSubFlags(r, a ^ b, topBit((r ^ a) & (r ^ b)), ((a ^ b ^ r) & 0x10) != 0);
         return r;
     }
-    uint16_t sub(uint32_t a, uint32_t b, bool c)
-    {
+
+    uint16_t sub(uint32_t a, uint32_t b, bool c) {
         uint32_t r = a - (b + (c ? 1 : 0));
         doAddSubFlags(r, a ^ b, topBit((a ^ b) & (r ^ a)), ((a ^ b ^ r) & 0x10) != 0);
         return r;
@@ -1863,7 +2025,7 @@ private:
     // Ring buffer of recent log lines for cycle logging
     std::deque<std::string> _logBuffer;
     size_t _logCapacity = 10000; // default capacity (lines)
-    bool _cycleLogging = false;  // enabled via GUI
+    bool _cycleLogging = false; // enabled via GUI
     Bus _bus;
 
 public:
@@ -1871,20 +2033,32 @@ public:
     void setCycleLogging(bool v) { _cycleLogging = v; }
     bool isCycleLogging() const { return _cycleLogging; }
     void clearCycleLog() { _logBuffer.clear(); }
-    void setCycleLogCapacity(size_t c) { _logCapacity = c; while (_logBuffer.size() > _logCapacity) _logBuffer.pop_front(); }
+
+    void setCycleLogCapacity(size_t c) {
+        _logCapacity = c;
+        while (_logBuffer.size() > _logCapacity)
+            _logBuffer.pop_front();
+    }
+
     const std::deque<std::string>& getCycleLogBuffer() const { return _logBuffer; }
     size_t getCycleLogSize() const { return _logBuffer.size(); }
     size_t getCycleLogCapacity() const { return _logCapacity; }
     // Append a single line directly into the cycle log buffer (for diagnostics/UI)
-    void appendCycleLogLine(const std::string &line) { _logBuffer.push_back(line); if (_logBuffer.size() > _logCapacity) _logBuffer.pop_front(); }
+    void appendCycleLogLine(const std::string& line) {
+        _logBuffer.push_back(line);
+        if (_logBuffer.size() > _logCapacity)
+            _logBuffer.pop_front();
+    }
 
     std::string getQueueString() const {
         // Return the bytes in the queue as hex bytes from index 0 .. _queueBytes-1
-        if (_queueBytes <= 0) return std::string();
+        if (_queueBytes <= 0)
+            return std::string();
         std::string out;
         for (int i = 0; i < _queueBytes; ++i) {
             const uint8_t b = static_cast<uint8_t>((_queue >> (i * 8)) & 0xFF);
-            if (!out.empty()) out += ' ';
+            if (!out.empty())
+                out += ' ';
             out += std::format("{:02X}", static_cast<unsigned>(b));
         }
         return out;
@@ -1900,7 +2074,7 @@ private:
     uint64_t _executeEndCycle;
     bool _consoleLogging;
 
-    bool _nmiRequested;  // Not actually set anywhere yet
+    bool _nmiRequested; // Not actually set anywhere yet
 
     BusState _busState;
     bool _prefetching;
@@ -1918,7 +2092,7 @@ private:
     uint32_t _queue;
     int _queueBytes;
     uint8_t* _byteRegisters[8];
-    uint8_t _microcode[4*512];
+    uint8_t _microcode[4 * 512];
     uint8_t _microcodeIndex[2048];
     uint16_t _translation[256];
     uint32_t _groups[257];
@@ -1937,6 +2111,7 @@ private:
     uint8_t _modRM;
     bool _carry;
     bool _zero;
+    bool _superZero;
     bool _auxiliary;
     bool _sign;
     uint8_t _parity;

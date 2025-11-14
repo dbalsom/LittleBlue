@@ -1,9 +1,22 @@
 #ifndef PIC_H
 #define PIC_H
 
+struct PicDebugState
+{
+    uint8_t irr;
+    uint8_t imr;
+    uint8_t isr;
+    uint8_t lines;
+};
+
+
 class PIC
 {
 public:
+    PIC() { // NOLINT(*-pro-type-member-init)
+        reset();
+    }
+
     void reset()
     {
         _interruptPending = false;
@@ -23,6 +36,7 @@ public:
         _rotateInAutomaticEOIMode = false;
         _initializationState = initializationStateNone;
     }
+
     void stubInit()
     {
         _icw1 = 0x13;
@@ -30,15 +44,18 @@ public:
         _icw4 = 0x0f;
         _imr = 0xbc;
     }
-    void write(int address, uint8_t data)
+
+    void write(const uint32_t address, const uint8_t data)
     {
         if (address == 0) {
             if ((data & 0x10) != 0) {
                 _icw1 = data;
-                if (levelTriggered())
+                if (levelTriggered()) {
                     _irr = _lines;
-                else
+                }
+                else {
                     _irr = 0;
+                }
                 _initializationState = initializationStateICW2;
                 _imr = 0;
                 _isr = 0;
@@ -55,7 +72,7 @@ public:
             }
             else {
                 if ((data & 8) == 0) {
-                    uint8_t b = 1 << (data & 7);
+                    const uint8_t b = 1 << (data & 7);
                     switch (data & 0xe0) {
                         case 0x00:  // Rotate in automatic EOI mode (clear) (Automatic Rotation)
                             _rotateInAutomaticEOIMode = false;
@@ -83,12 +100,15 @@ public:
                                 _priority = (data + 1) & 7;
                             }
                             break;
+                        default:
+                            break;
                     }
                 }
                 else {
                     _ocw3 = data;
-                    if ((_ocw3 & 0x40) != 0)
+                    if ((_ocw3 & 0x40) != 0) {
                         _specialMaskMode = (_ocw3 & 0x20) != 0;
+                    }
                 }
             }
         }
@@ -96,10 +116,12 @@ public:
             switch (_initializationState) {
                 case initializationStateICW2:
                     _icw2 = data;
-                    if (cascadeMode())
+                    if (cascadeMode()) {
                         _initializationState = initializationStateICW3;
-                    else
+                    }
+                    else {
                         checkICW4Needed();
+                    }
                     break;
                 case initializationStateICW3:
                     _icw3 = data;
@@ -115,130 +137,170 @@ public:
             }
         }
     }
-    uint8_t read(int address)
+
+    uint8_t read(const uint32_t address)
     {
-        if ((_ocw3 & 4) != 0) {  // Poll mode
+        if ((_ocw3 & 4) != 0) {
+            // Poll mode
             acknowledge();
-            return (_interruptPending ? 0x80 : 0) + _interrupt;
+            return (interruptPending() ? 0x80 : 0) + _interrupt;
         }
         if (address == 0) {
-            if ((_ocw3 & 1) != 0)
+            if ((_ocw3 & 1) != 0) {
                 return _isr;
+            }
             return _irr;
         }
-        else
-            return _imr;
+
+        return _imr;
     }
+
     uint8_t interruptAcknowledge()
     {
         if (_acknowledgedBytes == 0) {
             acknowledge();
             _acknowledgedBytes = 1;
-            if (i86Mode())
-                return 0xff;
-            else
-                return 0xcd;
+            if (i86Mode()) {
+                return 0xFF;
+            }
+            else {
+                return 0xCD;
+            }
         }
         if (i86Mode()) {
             _acknowledgedBytes = 0;
-            if (autoEOI())
+            if (autoEOI()) {
                 nonSpecificEOI(_rotateInAutomaticEOIMode);
+            }
             _interruptPending = false;
-            if (slaveOn(_interrupt))
-                return 0xff;  // Filled in by slave PIC
-            return _interrupt + (_icw2 & 0xf8);
+            if (slaveOn(_interrupt)) {
+                return 0xFF;  // Filled in by slave PIC
+            }
+            return _interrupt + (_icw2 & 0xF8);
         }
         if (_acknowledgedBytes == 1) {
             _acknowledgedBytes = 2;
-            if (slaveOn(_interrupt))
+            if (slaveOn(_interrupt)) {
                 return 0xff;  // Filled in by slave PIC
-            if ((_icw1 & 4) != 0)  // Call address interval 4
-                return (_interrupt << 2) + (_icw1 & 0xe0);
+            }
+            if ((_icw1 & 4) != 0) {
+                // Call address interval 4
+                return (_interrupt << 2) + (_icw1 & 0xE0);
+            }
             return (_interrupt << 3) + (_icw1 & 0xc0);
         }
         _acknowledgedBytes = 0;
-        if (autoEOI())
+        if (autoEOI()) {
             nonSpecificEOI(_rotateInAutomaticEOIMode);
+        }
         _interruptPending = false;
-        if (slaveOn(_interrupt))
+        if (slaveOn(_interrupt)) {
             return 0xff;  // Filled in by slave PIC
+        }
         return _icw2;
     }
-    void setIRQLine(int line, bool state)
+
+    void setIRQLine(const int line, const bool state)
     {
-        uint8_t b = 1 << line;
+        const uint8_t b = 1 << line;
         if (state) {
-            if (levelTriggered() || (_lines & b) == 0)
+            if (levelTriggered() || (_lines & b) == 0) {
                 _irr |= b;
+            }
             _lines |= b;
         }
         else {
             _irr &= ~b;
             _lines &= ~b;
         }
-        if (findBestInterrupt() != -1)
-            _interruptPending = true;
     }
-    bool interruptPending() const { return _interruptPending; }
-    uint8_t getIRQLines() { return _lines; }
+
+    [[nodiscard]] bool interruptPending() {
+        auto i = findBestInterrupt();
+        if (i != -1) {
+            if (i != 0) {
+                //std::cout << "PIC interrupt pending on line " << i << "\n";
+            }
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] uint8_t getIRQLines() const { return _lines; }
+
+    // Return a snapshot of internal PIC state for debugging UI
+    [[nodiscard]] PicDebugState getDebugState() const {
+        const PicDebugState s{
+            .irr = _irr,
+            .imr = _imr,
+            .isr = _isr,
+            .lines = _lines
+        };
+        return s;
+    }
 private:
-    bool cascadeMode() { return (_icw1 & 2) == 0; }
-    bool levelTriggered() { return (_icw1 & 8) != 0; }
-    bool i86Mode() { return (_icw4 & 1) != 0; }
-    bool autoEOI() { return (_icw4 & 2) != 0; }
-    bool slaveOn(int channel)
-    {
-        return cascadeMode() && (_icw4 & 0xc0) == 0xc0 &&
-            (_icw3 & (1 << channel)) != 0;
+    [[nodiscard]] bool cascadeMode() const { return (_icw1 & 2) == 0; }
+    [[nodiscard]] bool levelTriggered() const { return (_icw1 & 8) != 0; }
+    [[nodiscard]] bool i86Mode() const { return (_icw4 & 1) != 0; }
+    [[nodiscard]] bool autoEOI() const { return (_icw4 & 2) != 0; }
+    [[nodiscard]] bool slaveOn(const int channel) const {
+        return cascadeMode() && (_icw4 & 0xc0) == 0xc0 && (_icw3 & (1 << channel)) != 0;
     }
-    int findBestInterrupt()
-    {
+    [[nodiscard]] int findBestInterrupt() {
         int n = _priority;
         for (int i = 0; i < 8; ++i) {
-            uint8_t b = 1 << n;
-            bool s = (_icw4 & 0x10) != 0 && slaveOn(n);
-            if ((_isr & b) != 0 && !_specialMaskMode && !s)
+            const uint8_t b = 1 << n;
+            const bool s = (_icw4 & 0x10) != 0 && slaveOn(n);
+            if ((_isr & b) != 0 && !_specialMaskMode && !s) {
                 break;
-            if ((_irr & b) != 0 && (_imr & b) == 0 && ((_isr & b) == 0 || s))
+            }
+            if ((_irr & b) != 0 && (_imr & b) == 0 && ((_isr & b) == 0 || s)) {
                 return n;
-            if ((_isr & b) != 0 && !_specialMaskMode && s)
+            }
+            if ((_isr & b) != 0 && !_specialMaskMode && s) {
                 break;
+            }
             n = (n + 1) & 7;
+            _interrupt = n;
         }
         return -1;
     }
     void acknowledge()
     {
-        int i = findBestInterrupt();
+        const int i = findBestInterrupt();
         if (i == -1) {
             _interrupt = 7;
             return;
         }
-        uint8_t b = 1 << i;
+        const uint8_t b = 1 << i;
         _isr |= b;
-        if (!levelTriggered())
+        if (!levelTriggered()) {
             _irr &= ~b;
+        }
     }
     void nonSpecificEOI(bool rotatePriority = false)
     {
         int n = _priority;
         for (int i = 0; i < 8; ++i) {
-            uint8_t b = 1 << n;
+            const uint8_t b = 1 << n;
             n = (n + 1) & 7;
-            if ((_isr & b) != 0 && (_imr & b) == 0) {
+            if ((_isr & b) != 0) {
                 _isr &= ~b;
-                if (rotatePriority)
+                if (rotatePriority) {
                     _priority = n & 7;
+                }
                 break;
             }
         }
     }
     void checkICW4Needed()
     {
-        if ((_icw1 & 1) != 0)
+        if ((_icw1 & 1) != 0) {
             _initializationState = initializationStateICW4;
-        else
+        }
+        else {
             _initializationState = initializationStateNone;
+        }
     }
 
     enum InitializationState

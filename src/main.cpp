@@ -13,6 +13,9 @@
 #include <SDL3/SDL_init.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <SDL3_mixer/SDL_mixer.h>
+
+#include "Blip_Buffer.h"
+
 #include <imgui/imgui.h>
 #include <imgui/backends/imgui_impl_sdl3.h>
 #include <imgui/backends/imgui_impl_sdlrenderer3.h>
@@ -37,25 +40,32 @@
 #include "frontend/DisplayRenderer.h"
 #include "frontend/keyboard.h"
 
-
 // Forward declare the callback we'll register with SDL_ShowOpenFileDialog
 static void FileDialogCallback(void* userdata, const char* const* filelist, int filter_index);
 
+// Default window size (TODO: Read from config)
 constexpr uint32_t windowStartWidth = 1280;
 constexpr uint32_t windowStartHeight = 1024;
 
-bool init_audio(SDL_AudioDeviceID* outAudioDevice, MIX_Mixer** outMixer);
+bool init_audio(SDL_AudioDeviceID* outAudioDevice, MIX_Mixer** outMixer, SDL_AudioStream** outStream);
 
+// Main application context. Holds SDL objects, Machine instance, and UI state.
 struct AppContext
 {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
-    SDL_AudioDeviceID audioDevice = 0;
+    SDL_AudioDeviceID audio_device = 0;
     MIX_Mixer* mixer = nullptr;
+    SDL_AudioStream* pc_speaker_stream = nullptr;
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
     Machine* machine = nullptr;
-    DebuggerManager dbgManager;
+    DebuggerManager dbg_manager;
     bool running{true};
+
+    // Blip buffer for audio
+    Blip_Buffer blip_buf{};
+    Blip_Synth<blip_good_quality, 20> blip_synth;
+    blip_sample_t samples[BLIP_SAMPLE_COUNT];
 
     // FPS tracking
     Uint64 last_counter{0};
@@ -70,56 +80,68 @@ struct AppContext
     int max_frame_burst{5}; // max number of frames worth of ticks to run in a single iterate to avoid spiral of death
 
     // Display renderer and texture
-    DisplayRenderer displayRenderer;
-    SDL_Texture* displayTexture{nullptr};
+    DisplayRenderer display_renderer;
+    SDL_Texture* display_texture{nullptr};
 
-    // Memory editor UI
-    MemoryEditor memEditor;
-    bool showMemoryViewer{false};
-    bool showVramViewer{false};
-    bool showStackViewer{false};
-    bool showCpuViewer{false};
-    bool showVideoCardViewer{false};
-    bool showPicViewer{false};
-    bool showDmaViewer{false};
-    bool showDisplayDebug{false};
-    bool cpuRunning{true};
-    bool showDisassembly{false};
+    bool show_about{false};
+    bool show_demo{false};
+    bool show_io_debug{false};
+
+    // Emulator Debugger flags.
+    MemoryEditor mem_editor;
+    bool show_memory_viewer{false};
+    bool show_vram_viewer{false};
+    bool show_stack_viewer{false};
+    bool show_cpu_viewer{false};
+    bool show_video_card_viewer{false};
+    bool show_pic_viewer{false};
+    bool show_dma_viewer{false};
+    bool show_display_debug{false};
+    bool cpu_running{true};
+    bool show_disassembly{false};
 
     // CPU timing display
-    uint64_t lastCycleCount{0};
-    double smoothedMhz{0.0};
+    uint64_t last_cycle_count{0};
+    double smoothed_mhz{0.0};
 
     // Cycle log UI
-    bool showCycleLog{false};
-    bool cycleLogAutoScroll{true};
-    int cycleLogCapacityUI{10000};
-    size_t lastSeenCycleLogSize{0};
+    bool show_cycle_log{false};
+    bool cycle_log_auto_scroll{true};
+    int cycle_log_capacity_ui{10000};
+    size_t last_seen_cycle_log_size{0};
 
     // File dialog pending result handling
-    std::mutex fileDialogMutex;
-    SDL_DialogFileFilter* pendingFilters{nullptr}; // owned until dialog callback
-    std::string pendingDiskPath;
-    bool pendingDiskLoadFlag{false};
+    std::mutex file_dialog_mutex;
+    SDL_DialogFileFilter* pending_filters{nullptr}; // owned until dialog callback
+    std::string pending_disk_path;
+    bool pending_disk_load_flag{false};
+
+    void resetMachine() {
+        last_cycle_count = 0;
+        machine->resetMachine();
+    }
 };
 
+// SDL failure callback - logs the error and returns failure code.
 SDL_AppResult SDL_Fail() {
     SDL_LogError(SDL_LOG_CATEGORY_CUSTOM, "Error %s", SDL_GetError());
     return SDL_APP_FAILURE;
 }
 
+// SDL Application Initialization callback. We do all our emulator initialization here.
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
-    // init the library, here we make a window so we only need the Video capabilities.
+
+    // First step is to initialize SDL with the services we need specified in flags. We want to use Video and Audio.
     if (not SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         return SDL_Fail();
     }
 
-    // init TTF
+    // Initialize SDL TTF (unused at the moment...)
     if (not TTF_Init()) {
         return SDL_Fail();
     }
 
-    // Create a window
+    // Create our main window. We want it to be resizable and high-DPI aware.
     SDL_Window* window =
         SDL_CreateWindow(
             "XTCE-Blue",
@@ -131,11 +153,14 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
         return SDL_Fail();
     }
 
-    // create a renderer
+    // If we want to show graphics, we need a renderer, so create one now.
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     if (not renderer) {
         return SDL_Fail();
     }
+
+    // Enable Vsync. Running at 1000fps is impressive, but it can cause headaches for time stepping.
+    SDL_SetRenderVSync(renderer, 1);
 
     // Initialize ImGui
     IMGUI_CHECKVERSION();
@@ -145,10 +170,12 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
 
+    // Initialize ImGui's SDL3 integrations.
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
 
-    auto basePathPtr = SDL_GetBasePath();
+    // Get the directory our executable ran from - we can use this base path for loading resources, etc.
+    const auto basePathPtr = SDL_GetBasePath();
     if (not basePathPtr) {
         return SDL_Fail();
     }
@@ -181,26 +208,49 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     // };
 
     // Initialize audio
-    SDL_AudioDeviceID audioDevice;
+    SDL_AudioDeviceID audio_device;
     MIX_Mixer* mixer;
-    init_audio(&audioDevice, &mixer);
+    SDL_AudioStream* stream;
+    init_audio(&audio_device, &mixer, &stream);
 
-    // // load the music
-    // auto musicPath = basePath / "the_entertainer.ogg";
-    // auto music = Mix_LoadMUS(musicPath.string().c_str());
-    // if (not music) {
-    //     return SDL_Fail();
-    // }
-    //
-    // // play the music (does not loop)
-    // Mix_PlayMusic(music, 0);
 
-    // Create the emulator
+    // Create a Machine - this represents our emulator core.
     auto machine = new Machine();
 
-    // We'll allocate AppContext below and register windows into its dbgManager member.
+    // Set up our emulator application context.
+    auto* ctx = new AppContext();
+    ctx->window = window;
+    ctx->renderer = renderer;
+    ctx->audio_device = audio_device;
+    ctx->mixer = mixer;
+    ctx->pc_speaker_stream = stream;
+    ctx->machine = machine;
+    ctx->last_counter = SDL_GetPerformanceCounter();
 
-    // print some information about the window
+    // Initialize Blip_Buffer
+    ctx->blip_buf.sample_rate(AUDIO_SAMPLE_RATE);
+    const auto pit_clock_rate = static_cast<long>(ctx->crystal_hz / 12.0);
+    // PIT clock is (crystal / 12) or ~ 1.19318 MHz
+    ctx->blip_buf.clock_rate(pit_clock_rate);
+    ctx->blip_synth.volume(0.35);
+    ctx->blip_synth.output(&ctx->blip_buf);
+
+    // Attach our callback
+    ctx->machine->getBus()->setSpeakerCallback(
+        [ctx](uint64_t tick, bool state, bool enabled)
+        {
+            // Calculate elapsed ticks
+            const auto elapsed_ticks = static_cast<blip_time_t>(ctx->machine->getElapsedPitTicks(false));
+            if (enabled) {
+                ctx->blip_synth.offset(elapsed_ticks, state ? 1 : -1);
+            }
+            else {
+                // If the speaker is disabled, drive 0 level.
+                ctx->blip_synth.offset(elapsed_ticks, 0);
+            }
+        });
+
+    // Show our new SDL window, and print some debugs about its size and DPI.
     SDL_ShowWindow(window);
     {
         int width, height, bbwidth, bbheight;
@@ -213,64 +263,71 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
         }
     }
 
-    // set up the application data (allocate on heap so we can register windows into the dbgManager member)
-    auto* ctx = new AppContext();
-    ctx->window = window;
-    ctx->renderer = renderer;
-    ctx->audioDevice = audioDevice;
-    ctx->mixer = mixer;
-    ctx->machine = machine;
-    ctx->last_counter = SDL_GetPerformanceCounter();
 
     // Create the display texture used to show the CGA framebuffer. Use RGBA and streaming access for frequent updates.
-    ctx->displayTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-                                            DisplayRenderer::WIDTH, DisplayRenderer::HEIGHT);
-    if (!ctx->displayTexture) {
+    ctx->display_texture =
+        SDL_CreateTexture(
+            renderer,
+            SDL_PIXELFORMAT_RGBA32,
+            SDL_TEXTUREACCESS_STREAMING,
+            DisplayRenderer::WIDTH,
+            DisplayRenderer::HEIGHT);
+    if (!ctx->display_texture) {
         SDL_Log("Failed to create display texture: %s", SDL_GetError());
-        // Non-fatal; continue without texture
+        //return SDL_APP_FAILURE;
     }
 
     // Register our various debug windows with the AppContext's dbgManager
-    ctx->dbgManager.addWindow("Disassembly", std::make_unique<DisassemblyWindow>(machine), &ctx->showDisassembly);
-    ctx->dbgManager.addWindow("Cpu Status", std::make_unique<CpuStatusWindow>(machine), &ctx->showCpuViewer);
-    ctx->dbgManager.addWindow("Memory Viewer", std::make_unique<MemoryViewerWindow>(machine), &ctx->showMemoryViewer);
-    ctx->dbgManager.addWindow("VRAM Viewer", std::make_unique<MemoryViewerWindow>(machine, true), &ctx->showVramViewer);
-    ctx->dbgManager.addWindow("Stack Viewer", std::make_unique<StackViewerWindow>(machine), &ctx->showStackViewer);
-    ctx->dbgManager.addWindow("Cycle Log", std::make_unique<CycleLogWindow>(machine), &ctx->showCycleLog);
-    ctx->dbgManager.addWindow("Video Card Status", std::make_unique<VideoCardStatusWindow>(machine),
-                              &ctx->showVideoCardViewer);
-    ctx->dbgManager.addWindow("PIC Status", std::make_unique<PicStatusWindow>(machine), &ctx->showPicViewer);
-    ctx->dbgManager.addWindow("DMA Status", std::make_unique<DmacStatusWindow>(machine), &ctx->showDmaViewer);
+    ctx->dbg_manager.addWindow("Disassembly", std::make_unique<DisassemblyWindow>(machine),
+                               &ctx->show_disassembly);
+    ctx->dbg_manager.addWindow("Cpu Status", std::make_unique<CpuStatusWindow>(machine), &ctx->show_cpu_viewer);
+    ctx->dbg_manager.addWindow("Memory Viewer", std::make_unique<MemoryViewerWindow>(machine),
+                               &ctx->show_memory_viewer);
+    ctx->dbg_manager.addWindow("VRAM Viewer", std::make_unique<MemoryViewerWindow>(machine, true),
+                               &ctx->show_vram_viewer);
+    ctx->dbg_manager.addWindow("Stack Viewer", std::make_unique<StackViewerWindow>(machine),
+                               &ctx->show_stack_viewer);
+    ctx->dbg_manager.addWindow("Cycle Log", std::make_unique<CycleLogWindow>(machine), &ctx->show_cycle_log);
+    ctx->dbg_manager.addWindow("Video Card Status", std::make_unique<VideoCardStatusWindow>(machine),
+                               &ctx->show_video_card_viewer);
+    ctx->dbg_manager.addWindow("PIC Status", std::make_unique<PicStatusWindow>(machine), &ctx->show_pic_viewer);
+    ctx->dbg_manager.addWindow("DMA Status", std::make_unique<DmacStatusWindow>(machine),
+                               &ctx->show_dma_viewer);
     // Display debug window uses the app's displayTexture pointer
-    ctx->dbgManager.addWindow("Display Debug", std::make_unique<DisplayDebugWindow>(&ctx->displayTexture),
-                              &ctx->showDisplayDebug);
-    *appstate = ctx;
+    ctx->dbg_manager.addWindow("Display Debug", std::make_unique<DisplayDebugWindow>(&ctx->display_texture),
+                               &ctx->show_display_debug);
 
     // Initialize cycle count baseline for MHz measurement
-    static_cast<AppContext*>(*appstate)->lastCycleCount = static_cast<AppContext*>(*appstate)->machine->cycleCount();
+    ctx->last_cycle_count = ctx->machine->cycleCount();
 
-    // compute ticks_per_frame based on 60 FPS
-    auto* appc = static_cast<AppContext*>(*appstate);
-    const double fps = 60.0;
-    appc->ticks_per_frame = static_cast<int>(std::llround(appc->crystal_hz / fps));
+    // Calculate a ticks_per_frame based on the main system crystal frequency (14.3181818Mhz) and 60 FPS (CGA refresh rate).
+    // If you ever wanted to support other systems or video cards (MDA: 50Hz, VGA: 60/70Hz), you'd need to make
+    // these values configurable.
+    constexpr double fps = 60.0;
+    ctx->ticks_per_frame = static_cast<int>(std::llround(ctx->crystal_hz / fps));
+
     // Initialize cycle log UI capacity from machine state
-    static_cast<AppContext*>(*appstate)->cycleLogCapacityUI = static_cast<int>(static_cast<AppContext*>(*appstate)->
-                                                                               machine->getCycleLogCapacity());
+    ctx->cycle_log_capacity_ui = static_cast<int>(ctx->machine->getCycleLogCapacity());
 
-    SDL_SetRenderVSync(renderer, 1); // enable vysnc
+    // Assign our application state via the pointer passed in.
+    *appstate = ctx;
+
     SDL_Log("Application started successfully!");
 
-    // start the machine
-    appc->machine->run();
-
+    // Start the emulator!
+    ctx->machine->run();
 
     return SDL_APP_CONTINUE;
 }
 
+// SDL's event callback. Handle UI events and pass relevant input to the Machine.
 SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
     auto* app = static_cast<AppContext*>(appstate);
     uint8_t sc{};
+
+    // Let ImGui process the event first
     ImGui_ImplSDL3_ProcessEvent(event);
+    // Get a ImGuiIO for input capture checks
     const ImGuiIO& io = ImGui::GetIO();
 
     switch (event->type) {
@@ -295,6 +352,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
         //     break;
 
         case SDL_EVENT_KEY_DOWN:
+            // Only send key events to the machine if ImGui is not capturing keyboard input.
             if (!io.WantCaptureKeyboard) {
                 sc = translate_SDL_key(event->key.key, true);
                 app->machine->sendScanCode(sc);
@@ -302,6 +360,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
             break;
 
         case SDL_EVENT_KEY_UP:
+            // Only send key events to the machine if ImGui is not capturing keyboard input.
             if (!io.WantCaptureKeyboard) {
                 sc = translate_SDL_key(event->key.key, false);
                 app->machine->sendScanCode(sc);
@@ -320,44 +379,46 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
     return SDL_APP_CONTINUE;
 }
 
+// Main SDL loop. This is called repeatedly to run our program - we do our emulation stepping and rendering here.
 SDL_AppResult SDL_AppIterate(void* appstate) {
     auto* app = static_cast<AppContext*>(appstate);
     if (!app || !app->machine) {
         return SDL_APP_FAILURE;
     }
 
+    // Get the time delta since last update.
     const Uint64 now = SDL_GetPerformanceCounter();
     const double delta = static_cast<double>(now - app->last_counter) / static_cast<double>(
         SDL_GetPerformanceFrequency());
     app->last_counter = now;
 
-    // accumulate time and frames for smoother FPS
+    // Accumulate time and frames for smoother FPS
     app->fps_timer += static_cast<float>(delta);
     app->frame_count++;
 
     // Update CPU cycle / MHz measurement
     uint64_t cycles = app->machine->cycleCount();
-    uint64_t deltaCycles = cycles >= app->lastCycleCount ? cycles - app->lastCycleCount : 0;
+    uint64_t deltaCycles = cycles >= app->last_cycle_count ? cycles - app->last_cycle_count : 0;
     if (delta > 0.0) {
         double mhz = (static_cast<double>(deltaCycles) / delta) / 1e6; // MHz
         // Exponential smoothing: 90% previous, 10% new (adjust as needed)
-        const double alpha = 0.10;
-        app->smoothedMhz = (1.0 - alpha) * app->smoothedMhz + alpha * mhz;
+        constexpr double alpha = 0.10;
+        app->smoothed_mhz = (1.0 - alpha) * app->smoothed_mhz + alpha * mhz;
     }
-    app->lastCycleCount = cycles;
+    app->last_cycle_count = cycles;
 
     if (app->fps_timer >= 0.5f) {
-        // update twice per second
+        // Update FPS twice per second
         app->fps = static_cast<float>(app->frame_count) / app->fps_timer;
         app->frame_count = 0;
         app->fps_timer = 0.0f;
 
         char title[128];
-        snprintf(title, sizeof(title), "LittleBlue — %.1f FPS", app->fps);
+        snprintf(title, sizeof(title), "XTCE-Blue — %.1f FPS", app->fps);
         SDL_SetWindowTitle(app->window, title);
     }
 
-    // Convert elapsed wall-clock time to CPU ticks (crystal cycles) and run the machine
+    // Convert elapsed wall-clock time to CPU ticks (crystal cycles) and run the machine.
     // Use an accumulator of fractional ticks to preserve long-term accuracy.
     // Cap the amount of work per frame to avoid spiral-of-death if the app stalls.
     double ticks_this_frame = delta * app->crystal_hz;
@@ -380,9 +441,25 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
         else {
             // If CPU is paused, prevent tick_accumulator from growing without bound by capping it
             double max_accum = static_cast<long>(app->max_frame_burst) * std::max(1, app->ticks_per_frame);
-            if (app->tick_accumulator > max_accum)
+            if (app->tick_accumulator > max_accum) {
                 app->tick_accumulator = max_accum;
+            }
         }
+    }
+
+    // This completes one frame - end the Blip_Buffer frame here.
+    auto pit_ticks_elapsed = app->machine->getElapsedPitTicks(true);
+    //SDL_Log("PIT ticks elapsed this frame: %llu", static_cast<unsigned long long>(pit_ticks_elapsed));
+    app->blip_buf.end_frame(static_cast<blip_time_t>(pit_ticks_elapsed));
+
+    // Drain Blip_Buffer into the SDL audio stream
+    static int16_t temp[2048];
+    while (true) {
+        int n = app->blip_buf.read_samples(temp, 2048);
+        if (!n) {
+            break;
+        }
+        SDL_PutAudioStreamData(app->pc_speaker_stream, temp, n * sizeof(int16_t));
     }
 
     // If nothing to run, we still yield to UI and rendering below
@@ -394,23 +471,16 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
     SDL_SetRenderViewport(app->renderer, nullptr);
     SDL_SetRenderClipRect(app->renderer, nullptr);
 
+    // Start a new ImGui frame - SDL integrations first, native NewFrame() second.
     ImGui_ImplSDL3_NewFrame();
     ImGui_ImplSDLRenderer3_NewFrame();
-
-    static bool show_about = false; // persistent flag
-    static bool show_demo = false; // persistent flag
-    static bool show_io_debug = false; // persistent flag
-
     ImGui::NewFrame();
 
-    // Debug: show the raw CGA texture in an ImGui window to verify texture contents.
-    // moved into dbgManager as a managed window
-
-    // --- Main menu bar ---
+    // Draw the main menu bar
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("Emulator")) {
             if (ImGui::MenuItem("About...")) {
-                show_about = true; // open modal dialog
+                app->show_about = true; // open modal dialog
             }
             ImGui::Separator();
 
@@ -423,7 +493,7 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 
         if (ImGui::BeginMenu("Machine")) {
             if (ImGui::MenuItem("Reboot")) {
-                app->machine->resetMachine();
+                app->resetMachine();
             }
             ImGui::EndMenu();
         }
@@ -438,8 +508,8 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 
                 // Store pointer so callback can free it
                 {
-                    std::lock_guard<std::mutex> lk(app->fileDialogMutex);
-                    app->pendingFilters = filters;
+                    std::lock_guard<std::mutex> lk(app->file_dialog_mutex);
+                    app->pending_filters = filters;
                 }
 
                 // Launch asynchronous native open-file dialog. allow_many=false
@@ -452,7 +522,7 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
         if (ImGui::BeginMenu("Debug")) {
             // Add debugger windows (managed by DebuggerManager) - this will include
             // Memory Viewer, VRAM Viewer, Cycle Log, etc., because they've been registered.
-            app->dbgManager.drawMenuItems();
+            app->dbg_manager.drawMenuItems();
             ImGui::EndMenu();
         }
 
@@ -463,17 +533,17 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
     }
 
     // --- About dialog ---
-    if (show_about) {
-        ImGui::OpenPopup("About LittleBlue");
+    if (app->show_about) {
+        ImGui::OpenPopup("About XTCE-Blue");
     }
 
-    if (show_demo) {
+    if (app->show_demo) {
         ImGui::ShowDemoWindow();
     }
 
-    if (ImGui::BeginPopupModal("About LittleBlue", &show_about,
+    if (ImGui::BeginPopupModal("About XTCE-Blue", &app->show_about,
                                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
-        ImGui::Text("LittleBlue\n");
+        ImGui::Text("XTCE-Blue\n");
         ImGui::Separator();
         ImGui::Text("Version: 0.1.0");
         ImGui::Text("Authors:");
@@ -483,21 +553,21 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
         ImGui::NewLine();
 
         ImGui::NewLine();
-        ImGui::TextWrapped("LittleBlue is a cycle-accurate IBM XT emulator written in C++ using SDL3 and ImGui. "
-            "LittleBlue's 8088 emulation is powered by the XTCE 8088 CPU core - "
+        ImGui::TextWrapped("XTCE-Blue is a cycle-accurate IBM XT emulator written in C++ using SDL3 and ImGui. "
+            "XTCE-Blue's 8088 emulation is powered by the XTCE 8088 CPU core - "
             "which emulates the 8088 at the microcode level.");
 
         ImGui::NewLine();
 
         if (ImGui::Button("OK", ImVec2(120, 0))) {
             ImGui::CloseCurrentPopup();
-            show_about = false;
+            app->show_about = false;
         }
 
         ImGui::EndPopup();
     }
 
-    if (show_io_debug) {
+    if (app->show_io_debug) {
         const ImVec2 p = ImGui::GetMousePos();
         const ImGuiIO& io = ImGui::GetIO();
         ImGui::Begin("Input debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
@@ -511,7 +581,7 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
     // (No manual DrawWindow call here to avoid duplicate windows/menu items.)
 
     // Show any registered debug windows
-    app->dbgManager.showAll();
+    app->dbg_manager.showAll();
 
     SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
     SDL_RenderClear(app->renderer);
@@ -519,10 +589,10 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
     ImGui::Render();
 
     // Update and render display texture (CGA) before ImGui is drawn so UI overlays appear on top.
-    if (app->displayTexture && app->machine) {
+    if (app->display_texture && app->machine) {
         if (auto* bus = app->machine->getBus()) {
             if (auto* cga = bus->cga()) {
-                app->displayRenderer.render(cga);
+                app->display_renderer.render(cga);
 
                 // Integer rect for texture lock/update
                 SDL_Rect src_rect_i{0, 0, static_cast<int>(DisplayRenderer::WIDTH),
@@ -533,9 +603,9 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
                 // Try locking the streaming texture and memcpy rows to the texture memory for reliable updates.
                 void* tex_pixels = nullptr;
                 int tex_pitch = 0;
-                if (SDL_LockTexture(app->displayTexture, &src_rect_i, &tex_pixels, &tex_pitch) && (tex_pixels !=
+                if (SDL_LockTexture(app->display_texture, &src_rect_i, &tex_pixels, &tex_pitch) && (tex_pixels !=
                     nullptr)) {
-                    const uint8_t* src = app->displayRenderer.pixels();
+                    const uint8_t* src = app->display_renderer.pixels();
                     constexpr int row_bytes = DisplayRenderer::WIDTH * DisplayRenderer::BYTES_PER_PIXEL;
                     //SDL_Log("SDL_LockTexture succeeded: pitch=%d, rowBytes=%d", tex_pitch, row_bytes);
                     for (int y = 0; y < DisplayRenderer::HEIGHT; ++y) {
@@ -543,13 +613,14 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
                         const uint8_t* srcRow = src + static_cast<size_t>(y) * row_bytes;
                         memcpy(dstRow, srcRow, row_bytes);
                     }
-                    SDL_UnlockTexture(app->displayTexture);
+                    SDL_UnlockTexture(app->display_texture);
                     //SDL_Log("Texture updated via Lock/Unlock");
                 }
                 else {
                     // Fallback to SDL_UpdateTexture if lock failed
                     constexpr int pitch = DisplayRenderer::WIDTH * DisplayRenderer::BYTES_PER_PIXEL;
-                    if (!SDL_UpdateTexture(app->displayTexture, &src_rect_i, app->displayRenderer.pixels(), pitch)) {
+                    if (!SDL_UpdateTexture(app->display_texture, &src_rect_i, app->display_renderer.pixels(),
+                                           pitch)) {
                         SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
                     }
                 }
@@ -563,10 +634,9 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
                 dst.h = wh;
                 // Convert dst to floating rect for rendering
                 SDL_FRect dstF{0.0f, 0.0f, static_cast<float>(ww), static_cast<float>(wh)};
-                if (!SDL_RenderTexture(app->renderer, app->displayTexture, &src_rect_f, &dstF)) {
+                if (!SDL_RenderTexture(app->renderer, app->display_texture, &src_rect_f, &dstF)) {
                     SDL_Log("SDL_RenderTexture failed: %s", SDL_GetError());
-                    // Fallback: draw a magenta rectangle so user sees something instead of a black screen
-                    SDL_Log("Drawing fallback magenta rectangle to indicate texture render failure");
+                    // Fallback: Draw a magenta rectangle so user sees something obvious instead of a black screen
                     SDL_SetRenderDrawColor(app->renderer, 0xFF, 0x00, 0xFF, 0xFF);
                     SDL_RenderFillRect(app->renderer, &dstF);
                     // Restore draw color for ImGui
@@ -580,22 +650,23 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 
     // Process pending file dialog result (if any)
     {
-        std::lock_guard<std::mutex> lk(app->fileDialogMutex);
-        if (app->pendingDiskLoadFlag) {
-            app->pendingDiskLoadFlag = false;
+        std::lock_guard<std::mutex> lk(app->file_dialog_mutex);
+        if (app->pending_disk_load_flag) {
+            app->pending_disk_load_flag = false;
 
             // Load the selected disk image into the emulator
             if (auto* bus = app->machine->getBus()) {
                 try {
-                    std::ifstream in(app->pendingDiskPath, std::ios::binary);
+                    std::ifstream in(app->pending_disk_path, std::ios::binary);
                     if (!in) {
-                        SDL_Log("Failed to open selected floppy image: %s", app->pendingDiskPath.c_str());
+                        SDL_Log("Failed to open selected floppy image: %s", app->pending_disk_path.c_str());
                     }
                     else {
                         std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)),
                                                   std::istreambuf_iterator<char>());
                         bus->fdc()->loadDisk(0, data, true);
-                        SDL_Log("Loaded floppy image '%s' into FDC drive 0 (%zu bytes)", app->pendingDiskPath.c_str(),
+                        SDL_Log("Loaded floppy image '%s' into FDC drive 0 (%zu bytes)",
+                                app->pending_disk_path.c_str(),
                                 data.size());
                     }
                 }
@@ -609,16 +680,17 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
     return app->app_quit;
 }
 
+// Called when our SDL app needs to exit. We should clean up all our resources here.
 void SDL_AppQuit(void* appstate, SDL_AppResult result) {
     if (const auto* app = static_cast<AppContext*>(appstate)) {
-        if (app->displayTexture) {
-            SDL_DestroyTexture(app->displayTexture);
+        if (app->display_texture) {
+            SDL_DestroyTexture(app->display_texture);
         }
         SDL_DestroyRenderer(app->renderer);
         SDL_DestroyWindow(app->window);
 
         MIX_DestroyMixer(app->mixer);
-        SDL_CloseAudioDevice(app->audioDevice);
+        SDL_CloseAudioDevice(app->audio_device);
 
         delete app;
     }
@@ -630,17 +702,17 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result) {
     SDL_Quit();
 }
 
-bool init_audio(SDL_AudioDeviceID* outAudioDevice, MIX_Mixer** outMixer) {
+bool init_audio(SDL_AudioDeviceID* outAudioDevice, MIX_Mixer** outMixer, SDL_AudioStream** outStream) {
     // Desired audio spec
-    SDL_AudioSpec spec;
-    SDL_zero(spec);
-    spec.freq = 44100;
-    spec.format = SDL_AUDIO_S16; // signed 16-bit samples
-    spec.channels = 2; // stereo
+    constexpr auto out_spec = SDL_AudioSpec{
+        .format = SDL_AUDIO_S16,
+        .channels = 2,
+        .freq = AUDIO_SAMPLE_RATE,
+    };
 
     // 1) Init SDL audio
-    const SDL_AudioDeviceID audioDevice = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
-    if (not audioDevice) {
+    const SDL_AudioDeviceID audio_device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &out_spec);
+    if (not audio_device) {
         SDL_Log("Failed to open audio device: %s", SDL_GetError());
         return false;
     }
@@ -653,18 +725,36 @@ bool init_audio(SDL_AudioDeviceID* outAudioDevice, MIX_Mixer** outMixer) {
     }
 
     // 3) Create a mixer bound to the default playback device.
-    MIX_Mixer* mixer = MIX_CreateMixerDevice(audioDevice, &spec);
+    MIX_Mixer* mixer = MIX_CreateMixerDevice(audio_device, &out_spec);
     if (not mixer) {
         SDL_Log("Mix_OpenAudioDevice failed: %s", SDL_GetError());
-        SDL_CloseAudioDevice(audioDevice);
+        SDL_CloseAudioDevice(audio_device);
         return false;
     }
 
-    SDL_Log("Audio initialized successfully (device %u)", audioDevice);
-    if (outAudioDevice) {
-        *outAudioDevice = audioDevice;
-        *outMixer = mixer;
+    SDL_Log("Audio initialized successfully (device %u)", audio_device);
+
+    // 4) Create an audio stream
+    // Create an Audio stream for the PC speaker.
+    constexpr auto in_spec = SDL_AudioSpec{
+        .format = SDL_AUDIO_S16,
+        .channels = 1,
+        .freq = AUDIO_SAMPLE_RATE,
+    };
+    SDL_AudioStream* stream = SDL_CreateAudioStream(&in_spec, &out_spec);
+    if (not stream) {
+        SDL_Log("SDL_CreateAudioStream failed: %s", SDL_GetError());
+        MIX_DestroyMixer(mixer);
+        SDL_CloseAudioDevice(audio_device);
+        return false;
     }
+
+    SDL_BindAudioStream(audio_device, stream);
+    SDL_ResumeAudioDevice(audio_device);
+    *outAudioDevice = audio_device;
+    *outMixer = mixer;
+    *outStream = stream;
+
     return true;
 }
 
@@ -684,15 +774,15 @@ static void FileDialogCallback(void* userdata, const char* const* filelist, int 
         // Store the first selected path for processing on the main thread
         {
             const char* path = filelist[0];
-            std::lock_guard<std::mutex> lk(app->fileDialogMutex);
-            app->pendingDiskPath = path;
-            app->pendingDiskLoadFlag = true;
+            std::lock_guard<std::mutex> lk(app->file_dialog_mutex);
+            app->pending_disk_path = path;
+            app->pending_disk_load_flag = true;
         }
     }
 
     // Free any filters array we allocated earlier and stored in the context
-    if (app->pendingFilters) {
-        delete[] app->pendingFilters;
-        app->pendingFilters = nullptr;
+    if (app->pending_filters) {
+        delete[] app->pending_filters;
+        app->pending_filters = nullptr;
     }
 }

@@ -26,7 +26,10 @@ set(EXECUTABLE_NAME ${PROJECT_NAME})
 
 add_executable(${EXECUTABLE_NAME})
 
-target_include_directories(${EXECUTABLE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
+target_include_directories(${EXECUTABLE_NAME}
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/core
+        ${CMAKE_SOURCE_DIR}/src/third_party/blip_buffer)
 
 # Add your sources to the target
 target_sources(${EXECUTABLE_NAME} 
@@ -66,6 +69,7 @@ target_sources(${EXECUTABLE_NAME}
         src/gui/PicStatusWindow.cpp
         src/gui/DmacStatusWindow.cpp
         src/gui/DisplayDebugWindow.cpp
+        src/third_party/blip_buffer/blip_buffer.cpp
 )
 
 # Set C++ version

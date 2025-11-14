@@ -6,6 +6,7 @@ class PIT
 {
 public:
     void reset() {
+        ticks_ = 0;
         for (int i = 0; i < 3; ++i) {
             counters_[i].reset();
         }
@@ -36,17 +37,26 @@ public:
         return counters_[address].read();
     }
 
-    void wait() {
+    // Tick the PIT once.
+    void tick() {
+        ticks_++;
         for (int i = 0; i < 3; ++i) {
-            counters_[i].wait();
+            counters_[i].tick();
         }
+    }
+
+    // Return the number of PIT ticks since reset.
+    [[nodiscard]]
+    uint64_t getTicks() const {
+        return ticks_;
     }
 
     void setGate(const int counter, const bool gate) {
         counters_[counter].setGate(gate);
     }
 
-    [[nodiscard]] bool getOutput(const int counter) const {
+    [[nodiscard]]
+    bool getOutput(const int counter) const {
         return counters_[counter].output;
     }
 
@@ -116,7 +126,8 @@ private:
             return 0;
         }
 
-        void wait() {
+        // Tick the counter once.
+        void tick() {
             switch (control_byte & 0x0e) {
                 case 0x00: // Interrupt on Terminal Count
                     if (state == stateLoadDelay) {
@@ -418,6 +429,7 @@ private:
         bool have_write_byte;
     };
 
+    uint64_t ticks_{0};
     Counter counters_[3] = {};
 };
 

@@ -58,7 +58,6 @@ Currently, XTCE-Blue has emulation of the following devices:
 
 What it is currently lacking:
 
- - Sound
  - Serial Port(s)
  - Parallel Ports(s)
  - Game Port

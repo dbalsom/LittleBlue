@@ -39,8 +39,18 @@ public:
     }
 
     void resetMachine() {
+        last_pit_ticks_ = 0;
         cpu_.reset();
         cpu_.getBus()->reset();
+    }
+
+    uint64_t getElapsedPitTicks(const bool new_frame) {
+        const auto ticks = cpu_.getBus()->pit()->getTicks();
+        const auto elapsed_ticks = ticks - last_pit_ticks_;
+        if (new_frame) {
+            last_pit_ticks_ = ticks;
+        }
+        return elapsed_ticks;
     }
 
     void setState(const MachineState state) { state_ = state; }
@@ -130,5 +140,6 @@ public:
 
 private:
     MachineState state_{MachineState::Stopped};
+    uint64_t last_pit_ticks_ = 0;
     Cpu cpu_{};
 };

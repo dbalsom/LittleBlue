@@ -33,19 +33,12 @@ public:
     uint8_t* ram() { return &ram_[0]; }
     [[nodiscard]] size_t ramSize() const { return ram_.size(); }
 
-    // Expose CGA instance for tools/UI that need direct access to video memory
+    // Device accessors
     CGA* cga() { return &cga_; }
-
-    // Expose PIC instance for debugging UI
     PIC* pic() { return &pic_; }
-
-    // Restore PPI accessor (was accidentally removed)
+    PIT* pit() { return &pit_; }
     PPI* ppi() { return &ppi_; }
-
-    // Expose FDC instance so UI/tools can load disk images
     FDC* fdc() { return &fdc_; }
-
-    // Expose DMAC instance for debugging UI
     DMAC* dmac() { return &dmac_; }
 
     // Read a byte from a physical address without changing bus state.
@@ -107,7 +100,11 @@ public:
         last_counter0_output_ = true;
     }
 
-    void startAccess(uint32_t address, int type) {
+    void setSpeakerCallback(PcSpeakerCallback callback) {
+        speaker_callback_ = std::move(callback);
+    }
+
+    void startAccess(const uint32_t address, const int type) {
         address_ = address;
         type_ = type;
         cycle_ = 0;
@@ -122,7 +119,7 @@ public:
         // Handle PIT updates every 4 ticks
         if (pit_phase_ == 4) {
             pit_phase_ = 0;
-            pit_.wait();
+            pit_.tick();
             bool counter0Output = pit_.getOutput(0);
             if (last_counter0_output_ != counter0Output) {
                 pic_.setIRQLine(0, counter0Output);
@@ -508,11 +505,17 @@ private:
 
     void setSpeakerOutput() {
         bool o = !(counter2_output_ && speaker_mask_);
+
+        const auto pit_ticks = pit_.getTicks();
+        speaker_callback_(pit_ticks, counter2_output_, speaker_mask_);
+
         if (next_speaker_output_ != o) {
-            if (speaker_output_ == o)
+            if (speaker_output_ == o) {
                 speaker_cycle_ = 0;
-            else
+            }
+            else {
                 speaker_cycle_ = o ? 3 : 2;
+            }
             next_speaker_output_ = o;
         }
     }
@@ -603,5 +606,7 @@ private:
     uint8_t cga_phase_;
     bool last_kb_disabled_{false};
     bool last_kb_cleared_{false};
-    uint64_t _ticks{0};
+    PcSpeakerCallback speaker_callback_{nullptr};
+    uint64_t
+    _ticks{0};
 };

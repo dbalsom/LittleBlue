@@ -229,11 +229,18 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 
     // Initialize Blip_Buffer
     ctx->blip_buf.sample_rate(AUDIO_SAMPLE_RATE);
-    const auto pit_clock_rate = static_cast<long>(ctx->crystal_hz / 12.0);
+    ctx->blip_buf.bass_freq(200); // 200Hz high-pass filter to reduce bass rumble
     // PIT clock is (crystal / 12) or ~ 1.19318 MHz
-    ctx->blip_buf.clock_rate(pit_clock_rate);
+    ctx->blip_buf.clock_rate(static_cast<long>(ctx->crystal_hz / 12.0));
     ctx->blip_synth.volume(0.35);
     ctx->blip_synth.output(&ctx->blip_buf);
+
+    const blip_eq_t eq(
+        0.0, // 0dB = fairly flat highs
+        8000, // roll off above ~8kHz
+        AUDIO_SAMPLE_RATE);
+
+    ctx->blip_synth.treble_eq(eq);
 
     // Attach our callback
     ctx->machine->getBus()->setSpeakerCallback(
@@ -262,7 +269,6 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
             SDL_Log("This is a highdpi environment.");
         }
     }
-
 
     // Create the display texture used to show the CGA framebuffer. Use RGBA and streaming access for frequent updates.
     ctx->display_texture =
@@ -427,16 +433,56 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
     // Compute integer ticks to execute this iteration
     if (long ticks_to_run = static_cast<long>(std::floor(app->tick_accumulator)); ticks_to_run > 0) {
         // Cap ticks_to_run to a reasonable burst (e.g., max_frame_burst * ticks_per_frame)
-        if (const long max_ticks = static_cast<long>(app->max_frame_burst) * static_cast<long>(
-            std::max(1, app->ticks_per_frame)); ticks_to_run > max_ticks) {
+        const long max_ticks =
+            static_cast<long>(app->max_frame_burst) * static_cast<long>(std::max(1, app->ticks_per_frame));
+        if (ticks_to_run > max_ticks) {
             ticks_to_run = max_ticks;
         }
 
-        // Execute ticks on the machine
+        // Calculate audio latency
+        constexpr int max_queued_samples = AUDIO_SAMPLE_RATE * AUDIO_MAX_LATENCY_MS / 1000;
+        constexpr int max_queued_bytes = max_queued_samples * sizeof(int16_t);
+        int queued_bytes = SDL_GetAudioStreamAvailable(app->pc_speaker_stream);
+        if (queued_bytes > max_queued_bytes) {
+            // Too much audio queued, skip this frame's execution to let audio drain.
+            // This is not the best way to do this - better to dynamically adjust the audio stream's sample rate.
+            return SDL_APP_CONTINUE;
+        }
+
+        // Run the emulator.
         if (app->machine->isRunning()) {
-            app->machine->run_for(static_cast<uint64_t>(ticks_to_run));
-            // Remove executed ticks from accumulator
-            app->tick_accumulator -= static_cast<double>(ticks_to_run);
+
+            // We break up the total per-frame ticks_to_run into smaller slices to allow more frequent audio and input
+            // updates. For example, it is quite possible for a fast typist to generate multiple scancodes within a single
+            // 16.67ms frame (remember scancodes are sent on both key down and key up).
+            for (int si = 0; si < EMU_FRAME_SLICES; si++) {
+                auto slice_ticks = ticks_to_run / EMU_FRAME_SLICES;
+                if (si == EMU_FRAME_SLICES - 1) {
+                    // Last slice takes any remainder
+                    slice_ticks += ticks_to_run % EMU_FRAME_SLICES;
+                }
+
+                // Run emulator time slice.
+                app->machine->run_for(static_cast<uint64_t>(slice_ticks));
+                app->tick_accumulator -= static_cast<double>(slice_ticks);
+
+                // The PIT clock drives audio sync. Get the number of PIT ticks elapsed this slice.
+                // Passing true resets the tick counter for the next slice.
+                auto pit_ticks_elapsed = app->machine->getElapsedPitTicks(true);
+                //SDL_Log("PIT ticks elapsed this frame: %llu", static_cast<unsigned long long>(pit_ticks_elapsed));
+
+                // Tell Blip_Buffer we have completed an audio frame (emulator time slice).
+                app->blip_buf.end_frame(static_cast<blip_time_t>(pit_ticks_elapsed));
+
+                static int16_t temp[2048];
+                for (;;) {
+                    int n = app->blip_buf.read_samples(temp, 2048);
+                    if (n <= 0) {
+                        break;
+                    }
+                    SDL_PutAudioStreamData(app->pc_speaker_stream, temp, n * sizeof(int16_t));
+                }
+            }
         }
         else {
             // If CPU is paused, prevent tick_accumulator from growing without bound by capping it
@@ -447,20 +493,6 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
         }
     }
 
-    // This completes one frame - end the Blip_Buffer frame here.
-    auto pit_ticks_elapsed = app->machine->getElapsedPitTicks(true);
-    //SDL_Log("PIT ticks elapsed this frame: %llu", static_cast<unsigned long long>(pit_ticks_elapsed));
-    app->blip_buf.end_frame(static_cast<blip_time_t>(pit_ticks_elapsed));
-
-    // Drain Blip_Buffer into the SDL audio stream
-    static int16_t temp[2048];
-    while (true) {
-        int n = app->blip_buf.read_samples(temp, 2048);
-        if (!n) {
-            break;
-        }
-        SDL_PutAudioStreamData(app->pc_speaker_stream, temp, n * sizeof(int16_t));
-    }
 
     // If nothing to run, we still yield to UI and rendering below
     if (!app->running) {
@@ -703,6 +735,9 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result) {
 }
 
 bool init_audio(SDL_AudioDeviceID* outAudioDevice, MIX_Mixer** outMixer, SDL_AudioStream** outStream) {
+
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "512");
+
     // Desired audio spec
     constexpr auto out_spec = SDL_AudioSpec{
         .format = SDL_AUDIO_S16,

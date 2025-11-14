@@ -8,7 +8,7 @@
 #include <SDL3/SDL_log.h>
 #include <deque>
 
-#include "../littleblue.h"
+#include "../xtce_blue.h"
 #include "Bus.h"
 #include "SnifferDecoder.h"
 

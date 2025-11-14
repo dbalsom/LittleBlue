@@ -8,7 +8,7 @@
 #include <charconv>
 
 void CpuStatusWindow::show(bool* open) {
-    // Ensure ImGui context is available (helps static analyzers and prevents null deref)
+    // Ensure ImGui context is available
     IM_ASSERT(ImGui::GetCurrentContext() != nullptr);
 
     // Just bail with a tiny error dialog if no machine
@@ -26,8 +26,8 @@ void CpuStatusWindow::show(bool* open) {
             const uint64_t cycles_now = _machine->cycleCount();
 
             // Do CPU control buttons
-            static double lastStepTime = 0.0;
-            static uint64_t lastStepCycles = 0;
+            static double last_step_time = 0.0;
+            static uint64_t last_step_cycles = 0;
             if (_machine->isRunning()) {
                 if (ImGui::Button("Stop")) {
                     _machine->stop();
@@ -47,8 +47,8 @@ void CpuStatusWindow::show(bool* open) {
             ImGui::SameLine();
             // The 'Step' button advances to the next instruction boundary
             if (ImGui::Button("Step")) {
-                lastStepCycles = _machine->stepInstruction();
-                lastStepTime = ImGui::GetTime();
+                last_step_cycles = _machine->stepInstruction();
+                last_step_time = ImGui::GetTime();
             }
             ImGui::SameLine();
             // The 'Reset' button resets the CPU and begins execution from the reset vector
@@ -68,9 +68,9 @@ void CpuStatusWindow::show(bool* open) {
             ImGui::Text("Cycles: %llu", static_cast<unsigned long long>(cycles_now));
 
             // Show last step feedback until we run the next step.
-            if ((machine_state == MachineState::Stopped) && lastStepTime != 0.0) {
+            if ((machine_state == MachineState::Stopped) && last_step_time != 0.0) {
                 ImGui::SameLine();
-                ImGui::Text("Last step: %llu cycle(s)", static_cast<unsigned long long>(lastStepCycles));
+                ImGui::Text("Last step: %llu cycle(s)", static_cast<unsigned long long>(last_step_cycles));
             }
             //ImGui::Text("Effective: %.3f MHz", app->smoothedMhz);
             ImGui::Separator();

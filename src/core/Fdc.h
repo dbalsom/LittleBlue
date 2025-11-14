@@ -139,8 +139,7 @@ class FDC
 
 public:
     // ------------------------------- Lifecycle ------------------------------
-    explicit FDC(DMAC* dmac = nullptr) :
-        dmac_(dmac) {
+    FDC() {
         resetPowerOn();
     }
 

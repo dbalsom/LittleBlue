@@ -11,8 +11,8 @@ class Machine
 public:
     Machine() {
         //_cpu.setConsoleLogging();
-        _cpu.reset();
-        _cpu.getBus()->reset();
+        cpu_.reset();
+        cpu_.getBus()->reset();
         // _cpu.setExtents(
         //     -4,
         //     1000,
@@ -25,9 +25,9 @@ public:
 
     void run_for(const uint64_t ticks) {
         // The CPU core's run_for takes a number of CPU cycles (ticks/3 -> CPU cycles)
-        switch (_cpu.run_for(static_cast<int>(ticks / 3))) {
+        switch (cpu_.run_for(static_cast<int>(ticks / 3))) {
             case Cpu::RunResult::BreakpointHit:
-                _state = MachineState::BreakpointHit;
+                state_ = MachineState::BreakpointHit;
                 break;
             default:
                 break;
@@ -35,19 +35,19 @@ public:
     }
 
     void resetCpu() {
-        _cpu.reset();
+        cpu_.reset();
     }
 
     void resetMachine() {
-        _cpu.reset();
-        _cpu.getBus()->reset();
+        cpu_.reset();
+        cpu_.getBus()->reset();
     }
 
-    void setState(const MachineState state) { _state = state; }
-    [[nodiscard]] MachineState getState() const { return _state; }
+    void setState(const MachineState state) { state_ = state; }
+    [[nodiscard]] MachineState getState() const { return state_; }
 
     [[nodiscard]] std::string getStateString() const {
-        switch (_state) {
+        switch (state_) {
             case MachineState::Running:
                 return "Running";
             case MachineState::Stopped:
@@ -59,60 +59,60 @@ public:
         }
     }
 
-    [[nodiscard]] bool isRunning() const { return _state == MachineState::Running; }
-    void stop() { _state = MachineState::Stopped; }
-    void run() { _state = MachineState::Running; }
+    [[nodiscard]] bool isRunning() const { return state_ == MachineState::Running; }
+    void stop() { state_ = MachineState::Stopped; }
+    void run() { state_ = MachineState::Running; }
 
-    uint8_t* ram() { return _cpu.getBus()->ram(); }
-    [[nodiscard]] size_t ramSize() { return _cpu.getBus()->ramSize(); }
+    uint8_t* ram() { return cpu_.getBus()->ram(); }
+    [[nodiscard]] size_t ramSize() { return cpu_.getBus()->ramSize(); }
     // Expose the underlying bus for tools needing direct access (e.g., CGA/VRAM)
-    Bus* getBus() { return _cpu.getBus(); }
-    Cpu* getCpu() { return &_cpu; }
-    uint8_t getALU() { return _cpu.getALU(); }
+    Bus* getBus() { return cpu_.getBus(); }
+    Cpu* getCpu() { return &cpu_; }
+    uint8_t getALU() { return cpu_.getALU(); }
     // Read a byte from physical address space (RAM or ROM). Does not modify bus state.
-    uint8_t peekPhysical(uint32_t address) { return _cpu.getBus()->peek(address); }
-    [[nodiscard]] size_t romSize() { return _cpu.getBus()->romSize(); }
+    uint8_t peekPhysical(uint32_t address) { return cpu_.getBus()->peek(address); }
+    [[nodiscard]] size_t romSize() { return cpu_.getBus()->romSize(); }
 
     // Expose CPU register arrays for GUI inspection
-    uint16_t* getMainRegisters() { return _cpu.getMainRegisters(); }
-    uint16_t* registers() { return _cpu.getRegisters(); }
-    uint16_t getRealIP() { return _cpu.getRealIP(); }
-    std::string getQueueString() const { return _cpu.getQueueString(); }
+    uint16_t* getMainRegisters() { return cpu_.getMainRegisters(); }
+    uint16_t* registers() { return cpu_.getRegisters(); }
+    uint16_t getRealIP() { return cpu_.getRealIP(); }
+    std::string getQueueString() const { return cpu_.getQueueString(); }
 
     // Breakpoint control: forward to CPU
-    void setBreakpoint(uint16_t cs, uint16_t ip) { _cpu.setBreakpoint(cs, ip); }
-    void clearBreakpoint() { _cpu.clearBreakpoint(); }
-    bool hasBreakpoint() const { return _cpu.hasBreakpoint(); }
-    bool breakpointHit() const { return _cpu.breakpointHit(); }
-    void clearBreakpointHit() { _cpu.clearBreakpointHit(); }
-    uint16_t breakpointCS() const { return _cpu.breakpointCS(); }
-    uint16_t breakpointIP() const { return _cpu.breakpointIP(); }
+    void setBreakpoint(uint16_t cs, uint16_t ip) { cpu_.setBreakpoint(cs, ip); }
+    void clearBreakpoint() { cpu_.clearBreakpoint(); }
+    bool hasBreakpoint() const { return cpu_.hasBreakpoint(); }
+    bool breakpointHit() const { return cpu_.breakpointHit(); }
+    void clearBreakpointHit() { cpu_.clearBreakpointHit(); }
+    uint16_t breakpointCS() const { return cpu_.breakpointCS(); }
+    uint16_t breakpointIP() const { return cpu_.breakpointIP(); }
 
     // Return the CPU's cycle count (for display/diagnostics)
-    [[nodiscard]] uint64_t cycleCount() { return _cpu.cycle(); }
+    [[nodiscard]] uint64_t cycleCount() { return cpu_.cycle(); }
 
     // Cycle log control
-    void setCycleLogging(bool v) { _cpu.setCycleLogging(v); }
-    bool isCycleLogging() const { return _cpu.isCycleLogging(); }
-    void clearCycleLog() { _cpu.clearCycleLog(); }
-    void setCycleLogCapacity(size_t c) { _cpu.setCycleLogCapacity(c); }
-    [[nodiscard]] const std::deque<std::string>& getCycleLogBuffer() const { return _cpu.getCycleLogBuffer(); }
-    [[nodiscard]] size_t getCycleLogSize() const { return _cpu.getCycleLogSize(); }
-    [[nodiscard]] size_t getCycleLogCapacity() const { return _cpu.getCycleLogCapacity(); }
+    void setCycleLogging(bool v) { cpu_.setCycleLogging(v); }
+    bool isCycleLogging() const { return cpu_.isCycleLogging(); }
+    void clearCycleLog() { cpu_.clearCycleLog(); }
+    void setCycleLogCapacity(size_t c) { cpu_.setCycleLogCapacity(c); }
+    [[nodiscard]] const std::deque<std::string>& getCycleLogBuffer() const { return cpu_.getCycleLogBuffer(); }
+    [[nodiscard]] size_t getCycleLogSize() const { return cpu_.getCycleLogSize(); }
+    [[nodiscard]] size_t getCycleLogCapacity() const { return cpu_.getCycleLogCapacity(); }
     // Append a line directly to the CPU's cycle log buffer (diagnostic helper)
-    void appendCycleLogLine(const std::string& line) { _cpu.appendCycleLogLine(line); }
+    void appendCycleLogLine(const std::string& line) { cpu_.appendCycleLogLine(line); }
 
     // Step the CPU to the next instruction boundary. Returns the number of CPU cycles executed.
     uint64_t stepInstruction() {
-        const auto cycles = static_cast<uint64_t>(_cpu.stepToNextInstruction());
-        if (_state == MachineState::Running) {
-            _state = MachineState::Stopped;
+        const auto cycles = static_cast<uint64_t>(cpu_.stepToNextInstruction());
+        if (state_ == MachineState::Running) {
+            state_ = MachineState::Stopped;
         }
         return cycles;
     }
 
     void sendScanCode(uint8_t scancode) {
-        const auto ppi = _cpu.getBus()->ppi();
+        const auto ppi = cpu_.getBus()->ppi();
 
         // PB6 LOW output disables the clock line to the keyboard, so only read in a keyboard byte if it is high.
         if (!ppi->getB(6)) {
@@ -125,10 +125,10 @@ public:
         }
 
         // Request a keyboard interrupt.
-        _cpu.getBus()->pic()->setIRQLine(1, true);
+        cpu_.getBus()->pic()->setIRQLine(1, true);
     }
 
 private:
-    MachineState _state{MachineState::Stopped};
-    Cpu _cpu{};
+    MachineState state_{MachineState::Stopped};
+    Cpu cpu_{};
 };

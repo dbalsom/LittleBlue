@@ -35,6 +35,7 @@ void VideoCardStatusWindow::show(bool* open) {
     ImGui::Text("Mode Register:");
     ImGui::NextColumn();
     ImGui::Text("%s", std::bitset<8>(cga_state.mode_byte).to_string().c_str());
+    // Show individual decoded mode bits in a table
     if (ImGui::BeginTable("cga_mode_flags", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Flag");
         ImGui::TableSetupColumn("V");
@@ -75,11 +76,7 @@ void VideoCardStatusWindow::show(bool* open) {
     }
     ImGui::NextColumn();
 
-    // Show individual decoded mode bits in a table
     ImGui::Separator();
-    ImGui::Text("Mode Flags:");
-    ImGui::Separator();
-
 
     ImGui::Text("Clock Divisor:");
     ImGui::NextColumn();

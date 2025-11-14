@@ -1,8 +1,11 @@
 #include "CycleLogWindow.h"
 #include "../core/Machine.h"
 
-void CycleLogWindow::show(bool *open) {
+void CycleLogWindow::show(bool* open) {
+
     IM_ASSERT(ImGui::GetCurrentContext() != nullptr);
+
+    // ReSharper disable once CppDFAConstantConditions
     if (!_machine) {
         ImGui::Begin("Cycle Log", open);
         ImGui::Text("No Machine instance");
@@ -10,6 +13,7 @@ void CycleLogWindow::show(bool *open) {
         return;
     }
 
+    // ReSharper disable once CppDFAUnreachableCode
     ImGui::Begin("Cycle Log", open);
 
     // Controls: enable logging checkbox, clear, capacity
@@ -32,15 +36,17 @@ void CycleLogWindow::show(bool *open) {
     ImGui::Checkbox("Auto-scroll", &_autoScroll);
 
     ImGui::SameLine();
-    ImGui::Text("Capacity:"); ImGui::SameLine();
+    ImGui::Text("Capacity:");
+    ImGui::SameLine();
     if (ImGui::InputInt("##capacity", &_capacityUI, 0, 1000)) {
-        if (_capacityUI < 0) _capacityUI = 0;
+        if (_capacityUI < 0)
+            _capacityUI = 0;
         _machine->setCycleLogCapacity(static_cast<size_t>(_capacityUI));
     }
 
     ImGui::Separator();
     ImGui::Text("Lines: %llu", static_cast<unsigned long long>(_machine->getCycleLogSize()));
-    const auto &bufPreview = _machine->getCycleLogBuffer();
+    const auto& bufPreview = _machine->getCycleLogBuffer();
     if (!bufPreview.empty()) {
         ImGui::TextWrapped("Last: %s", bufPreview.back().c_str());
     }
@@ -48,8 +54,8 @@ void CycleLogWindow::show(bool *open) {
 
     // Log contents
     ImGui::BeginChild("##cyclelog_child", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
-    const auto &buf = _machine->getCycleLogBuffer();
-    for (const auto &line : buf) {
+    const auto& buf = _machine->getCycleLogBuffer();
+    for (const auto& line : buf) {
         ImGui::TextUnformatted(line.c_str());
     }
     if (_autoScroll && buf.size() != _lastSeenSize) {

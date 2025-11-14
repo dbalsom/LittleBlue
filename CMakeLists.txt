@@ -9,7 +9,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}" CACHE INTERNAL "")
 
 # Declare the project
-project(littleblue)
+project(xtce-blue)
 
 if (APPLE OR EMSCRIPTEN)
     set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "")    # Disable shared builds on platforms where it does not make sense to use them
@@ -34,7 +34,7 @@ target_sources(${EXECUTABLE_NAME}
         src/main.cpp
         src/core/Machine.cpp
         src/core/Machine.h
-        src/littleblue.h
+        src/xtce_blue.h
         src/core/bios.h
         src/core/font.h
         src/core/Dmac.h
@@ -81,6 +81,7 @@ endif()
 # pollute upwards into our configuration.
 add_subdirectory(SDL EXCLUDE_FROM_ALL)
 
+# Add ImGui
 add_library(imgui
         imgui/imgui.cpp
         imgui/imgui_draw.cpp
@@ -98,6 +99,7 @@ target_include_directories(imgui
                 ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends
 )
 
+# Link ImGui to SDL
 target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
 # If you don't want SDL_ttf, then remove this section.

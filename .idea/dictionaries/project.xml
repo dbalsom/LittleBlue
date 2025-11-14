@@ -8,6 +8,7 @@
       <w>dmac</w>
       <w>hchar</w>
       <w>microcoded</w>
+      <w>strobed</w>
       <w>vram</w>
       <w>xtce</w>
     </words>

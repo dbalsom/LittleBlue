@@ -29,36 +29,36 @@ public:
     [[nodiscard]] DMADebugStatus getDMADebugStatus() const {
         DMADebugStatus s;
         for (int i = 0; i < 4; ++i) {
-            const auto& c = _channels[i];
-            s.channels[i].baseAddress = c._baseAddress;
-            s.channels[i].baseWordCount = c._baseWordCount;
-            s.channels[i].currentAddress = c._currentAddress;
-            s.channels[i].currentWordCount = c._currentWordCount;
-            s.channels[i].mode = c._mode;
+            const auto& c = channels_[i];
+            s.channels[i].baseAddress = c.base_address;
+            s.channels[i].baseWordCount = c.base_word_count;
+            s.channels[i].currentAddress = c.current_address;
+            s.channels[i].currentWordCount = c.current_word_count;
+            s.channels[i].mode = c.mode;
         }
-        s.status = _status;
-        s.command = _command;
-        s.request = _request;
-        s.mask = _mask;
-        s.ack = _channel == -1 ? 0x00 : 0x01 << _channel;
+        s.status = status_;
+        s.command = command_;
+        s.request = request_;
+        s.mask = mask_;
+        s.ack = channel_ == -1 ? 0x00 : 0x01 << channel_;
         return s;
     }
 
     void reset() {
-        for (auto& channel : _channels) {
+        for (auto& channel : channels_) {
             channel.reset();
         }
-        _temporaryAddress = 0;
-        _temporaryWordCount = 0;
-        _status = 0;
-        _command = 0;
-        _temporary = 0;
-        _mask = 0xf;
-        _request = 0;
-        _ack = 0;
-        _flipFlop = false;
-        _channel = -1;
-        _needHighAddress = true;
+        temporary_address_ = 0;
+        temporary_word_count_ = 0;
+        status_ = 0;
+        command_ = 0;
+        temporary_ = 0;
+        mask_ = 0xf;
+        request_ = 0;
+        ack_ = 0;
+        flip_flop_ = false;
+        channel_ = -1;
+        need_high_address_ = true;
     }
 
     void write(const uint32_t address, const uint8_t data) {
@@ -67,19 +67,19 @@ public:
             case 0x02:
             case 0x04:
             case 0x06:
-                _channels[(address & 6) >> 1].setAddress(_flipFlop, data);
-                _flipFlop = !_flipFlop;
+                channels_[(address & 6) >> 1].setAddress(flip_flop_, data);
+                flip_flop_ = !flip_flop_;
                 break;
             case 0x01:
             case 0x03:
             case 0x05:
             case 0x07:
-                _channels[(address & 6) >> 1].setCount(_flipFlop, data);
-                _flipFlop = !_flipFlop;
+                channels_[(address & 6) >> 1].setCount(flip_flop_, data);
+                flip_flop_ = !flip_flop_;
                 break;
             case 0x08:
                 // Write Command Register
-                _command = data;
+                command_ = data;
                 break;
             case 0x09:
                 // Write Request Register
@@ -90,18 +90,18 @@ public:
             {
                 uint8_t b = 1 << (data & 3);
                 if ((data & 4) != 0)
-                    _mask |= b;
+                    mask_ |= b;
                 else
-                    _mask &= ~b;
+                    mask_ &= ~b;
             }
             break;
             case 0x0b:
                 // Write Mode Register
-                _channels[data & 3]._mode = data;
+                channels_[data & 3].mode = data;
                 break;
             case 0x0c:
                 // Clear Byte Pointer Flip/Flop
-                _flipFlop = false;
+                flip_flop_ = false;
                 break;
             case 0x0d:
                 // Master Clear
@@ -109,11 +109,11 @@ public:
                 break;
             case 0x0e:
                 // Clear Mask Register
-                _mask = 0;
+                mask_ = 0;
                 break;
             case 0x0f:
                 // Write All Mask Register Bits
-                _mask = data;
+                mask_ = data;
                 break;
             default:
                 break;
@@ -126,20 +126,20 @@ public:
             case 0x02:
             case 0x04:
             case 0x06:
-                _flipFlop = !_flipFlop;
-                return _channels[(address & 6) >> 1].getAddress(!_flipFlop);
+                flip_flop_ = !flip_flop_;
+                return channels_[(address & 6) >> 1].getAddress(!flip_flop_);
             case 0x01:
             case 0x03:
             case 0x05:
             case 0x07:
-                _flipFlop = !_flipFlop;
-                return _channels[(address & 6) >> 1].getCount(!_flipFlop);
+                flip_flop_ = !flip_flop_;
+                return channels_[(address & 6) >> 1].getCount(!flip_flop_);
             case 0x08:
                 // Read Status Register
-                return _status;
+                return status_;
             case 0x0d:
                 // Read Temporary Register
-                return _temporary;
+                return temporary_;
             default:
                 // Illegal
                 return 0xff;
@@ -151,11 +151,11 @@ public:
     }
 
     [[nodiscard]] uint8_t getRequestLines() const {
-        return _request;
+        return request_;
     }
 
     bool getHoldRequestLine() {
-        if (_channel != -1) {
+        if (channel_ != -1) {
             return true;
         }
         if (disabled()) {
@@ -164,11 +164,11 @@ public:
         for (int i = 0; i < 4; ++i) {
             int channel = i;
             if (rotatingPriority()) {
-                channel = (channel + _priorityChannel) & 3;
+                channel = (channel + priority_channel_) & 3;
             }
-            if ((_request & (1 << channel)) != 0) {
-                _channel = channel;
-                _priorityChannel = (channel + 1) & 3;
+            if ((request_ & (1 << channel)) != 0) {
+                channel_ = channel;
+                priority_channel_ = (channel + 1) & 3;
                 return true;
             }
         }
@@ -176,73 +176,73 @@ public:
     }
 
     void dmaCompleted() {
-        _channel = -1;
+        channel_ = -1;
     }
 
     uint8_t dmaRead() {
-        if (memoryToMemory() && _channel == 1) {
-            return _temporary;
+        if (memoryToMemory() && channel_ == 1) {
+            return temporary_;
         }
         return 0xff;
     }
 
     void dmaWrite(const uint8_t data) {
-        if (memoryToMemory() && _channel == 0) {
-            _temporary = data;
+        if (memoryToMemory() && channel_ == 0) {
+            temporary_ = data;
         }
     }
 
     bool isReading() {
-        if (_channel > 0) {
-            auto& c = _channels[_channel & 3];
+        if (channel_ > 0) {
+            auto& c = channels_[channel_ & 3];
 
-            return c.read();
+            return c.isReadMode();
         }
         return false;
     }
 
     bool isWriting() {
-        if (_channel > 0) {
-            auto& c = _channels[_channel & 3];
+        if (channel_ > 0) {
+            auto& c = channels_[channel_ & 3];
 
-            return c.write();
+            return c.isWriteMode();
         }
         return false;
     }
 
     [[nodiscard]] uint16_t address() const {
-        if (_channel == -1) {
+        if (channel_ == -1) {
             return 0;
         }
-        const uint16_t address = _channels[_channel]._currentAddress;
+        const uint16_t address = channels_[channel_].current_address;
         return address;
     }
 
     uint16_t service() {
-        if (_channel == -1) {
+        if (channel_ == -1) {
             return 0;
         }
-        auto& c = _channels[_channel & 3];
+        auto& c = channels_[channel_ & 3];
 
-        if (!c.terminalCount() || c.autoinitializate()) {
+        if (!c.isAtTerminalCount() || c.isAutoinitialize()) {
             c.incrementAddress();
         }
-        if (c.terminalCount()) {
-            _status |= 0x01 << _channel;
+        if (c.isAtTerminalCount()) {
+            status_ |= 0x01 << channel_;
         }
 
-        return c._currentAddress;
+        return c.current_address;
     }
 
     [[nodiscard]] bool terminalCount() const {
-        if (_channel == -1) {
+        if (channel_ == -1) {
             return false;
         }
-        return _channels[_channel & 3].terminalCount();
+        return channels_[channel_ & 3].isAtTerminalCount();
     }
 
     [[nodiscard]] int channel() const {
-        return _channel;
+        return channel_;
     }
 
 private:
@@ -250,128 +250,128 @@ private:
     {
         void setAddress(const bool high, const uint8_t data) {
             if (!high) {
-                _baseAddress = (_baseAddress & 0xff00) + data;
-                _currentAddress = (_currentAddress & 0xff00) + data;
+                base_address = (base_address & 0xff00) + data;
+                current_address = (current_address & 0xff00) + data;
             }
             else {
-                _baseAddress = (_baseAddress & 0xff) + (data << 8);
-                _currentAddress = (_currentAddress & 0xff) + (data << 8);
+                base_address = (base_address & 0xff) + (data << 8);
+                current_address = (current_address & 0xff) + (data << 8);
             }
         }
 
         void setCount(const bool high, uint8_t data) {
-            _tc = false;
+            tc = false;
             if (!high) {
-                _baseWordCount = (_baseWordCount & 0xff00) + data;
-                _currentWordCount = (_currentWordCount & 0xff00) + data;
+                base_word_count = (base_word_count & 0xff00) + data;
+                current_word_count = (current_word_count & 0xff00) + data;
             }
             else {
-                _baseWordCount = (_baseWordCount & 0xff) + (data << 8);
-                _currentWordCount = (_currentWordCount & 0xff) + (data << 8);
+                base_word_count = (base_word_count & 0xff) + (data << 8);
+                current_word_count = (current_word_count & 0xff) + (data << 8);
             }
         }
 
         [[nodiscard]] uint8_t getAddress(const bool high) const {
             if (high) {
-                return _currentAddress >> 8;
+                return current_address >> 8;
             }
-            return _currentAddress & 0xff;
+            return current_address & 0xff;
         }
 
         [[nodiscard]] uint8_t getCount(const bool high) const {
             if (high) {
-                return _currentWordCount >> 8;
+                return current_word_count >> 8;
             }
-            return _currentWordCount & 0xff;
+            return current_word_count & 0xff;
         }
 
         void reset() {
-            _baseAddress = 0;
-            _baseWordCount = 0;
-            _currentAddress = 0;
-            _currentWordCount = 0;
-            _mode = 0;
+            base_address = 0;
+            base_word_count = 0;
+            current_address = 0;
+            current_word_count = 0;
+            mode = 0;
         }
 
         void incrementAddress() {
-            if (!addressDecrement()) {
-                ++_currentAddress;
+            if (!isAddressDecrement()) {
+                ++current_address;
             }
             else {
-                --_currentAddress;
+                --current_address;
             }
-            --_currentWordCount;
-            if (_currentWordCount == 0xFFFF) {
+            --current_word_count;
+            if (current_word_count == 0xFFFF) {
                 // We allow the word count to roll over because we do a transfer on a 0 count.
                 // We've hit terminal count at this point.
-                _tc = true;
+                tc = true;
 
                 // Now we just need to handle autoinitialization, or reset the word count to 0.
-                if (autoinitializate()) {
+                if (isAutoinitialize()) {
                     // It may seem counterintuitive, but the TC flag is not reset by auto-initialization.
-                    _currentAddress = _baseAddress;
-                    _currentWordCount = _baseWordCount;
+                    current_address = base_address;
+                    current_word_count = base_word_count;
                 }
                 else {
-                    _currentWordCount = 0;
+                    current_word_count = 0;
                 }
             }
         }
 
-        [[nodiscard]] bool write() const { return (_mode & 0x0c) == 4; }
-        [[nodiscard]] bool read() const { return (_mode & 0x0c) == 8; }
-        [[nodiscard]] bool verify() const { return (_mode & 0x0c) == 0; }
-        [[nodiscard]] bool autoinitializate() const { return (_mode & 0x10) != 0; }
-        [[nodiscard]] bool addressDecrement() const { return (_mode & 0x20) != 0; }
-        [[nodiscard]] bool demand() const { return (_mode & 0xc0) == 0x00; }
-        [[nodiscard]] bool single() const { return (_mode & 0xc0) == 0x40; }
-        [[nodiscard]] bool block() const { return (_mode & 0xc0) == 0x80; }
-        [[nodiscard]] bool cascade() const { return (_mode & 0xc0) == 0xc0; }
-        [[nodiscard]] bool terminalCount() const { return _tc; }
+        [[nodiscard]] bool isWriteMode() const { return (mode & 0x0c) == 4; }
+        [[nodiscard]] bool isReadMode() const { return (mode & 0x0c) == 8; }
+        [[nodiscard]] bool isVerifyMode() const { return (mode & 0x0c) == 0; }
+        [[nodiscard]] bool isAutoinitialize() const { return (mode & 0x10) != 0; }
+        [[nodiscard]] bool isAddressDecrement() const { return (mode & 0x20) != 0; }
+        [[nodiscard]] bool isDemand() const { return (mode & 0xc0) == 0x00; }
+        [[nodiscard]] bool isSingle() const { return (mode & 0xc0) == 0x40; }
+        [[nodiscard]] bool isBlock() const { return (mode & 0xc0) == 0x80; }
+        [[nodiscard]] bool isCascade() const { return (mode & 0xc0) == 0xc0; }
+        [[nodiscard]] bool isAtTerminalCount() const { return tc; }
 
-        uint16_t _baseAddress;
-        uint16_t _baseWordCount;
-        uint16_t _currentAddress;
-        uint16_t _currentWordCount;
-        uint8_t _mode; // Only 6 bits used
-        bool _tc = false;
+        uint16_t base_address;
+        uint16_t base_word_count;
+        uint16_t current_address;
+        uint16_t current_word_count;
+        uint8_t mode; // Only 6 bits used
+        bool tc = false;
     };
 
-    bool memoryToMemory() { return (_command & 1) != 0; }
-    bool channel0AddressHold() { return (_command & 2) != 0; }
-    bool disabled() { return (_command & 4) != 0; }
-    bool compressedTiming() { return (_command & 8) != 0; }
-    bool rotatingPriority() { return (_command & 0x10) != 0; }
-    bool extendedWriteSelection() { return (_command & 0x20) != 0; }
+    bool memoryToMemory() { return (command_ & 1) != 0; }
+    bool channel0AddressHold() { return (command_ & 2) != 0; }
+    bool disabled() { return (command_ & 4) != 0; }
+    bool compressedTiming() { return (command_ & 8) != 0; }
+    bool rotatingPriority() { return (command_ & 0x10) != 0; }
+    bool extendedWriteSelection() { return (command_ & 0x20) != 0; }
 
 
-    bool dreqSenseActiveLow() { return (_command & 0x40) != 0; }
-    bool dackSenseActiveHigh() { return (_command & 0x80) != 0; }
+    bool dreqSenseActiveLow() { return (command_ & 0x40) != 0; }
+    bool dackSenseActiveHigh() { return (command_ & 0x80) != 0; }
 
     void setRequest(const int line, const bool active) {
         const uint8_t b = 1 << line;
         const uint8_t s = 0x10 << line;
         if (active) {
-            _request |= b;
-            _status |= s;
+            request_ |= b;
+            status_ |= s;
         }
         else {
-            _request &= ~b;
-            _status &= ~s;
+            request_ &= ~b;
+            status_ &= ~s;
         }
     }
 
-    Channel _channels[4] = {};
-    uint16_t _temporaryAddress = 0;
-    uint16_t _temporaryWordCount = 0;
-    uint8_t _status = 0;
-    uint8_t _command = 0;
-    uint8_t _temporary = 0;
-    uint8_t _mask = 0; // Only 4 bits used
-    uint8_t _request = 0; // Only 4 bits used
-    uint8_t _ack = 0; // Only 4 bits used
-    bool _flipFlop = false;
-    int _channel = 0;
-    int _priorityChannel = 0;
-    bool _needHighAddress = false;
+    Channel channels_[4] = {};
+    uint16_t temporary_address_ = 0;
+    uint16_t temporary_word_count_ = 0;
+    uint8_t status_ = 0;
+    uint8_t command_ = 0;
+    uint8_t temporary_ = 0;
+    uint8_t mask_ = 0; // Only 4 bits used
+    uint8_t request_ = 0; // Only 4 bits used
+    uint8_t ack_ = 0; // Only 4 bits used
+    bool flip_flop_ = false;
+    int channel_ = 0;
+    int priority_channel_ = 0;
+    bool need_high_address_ = false;
 };

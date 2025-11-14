@@ -1,3 +1,13 @@
+#include <cmath>
+#include <string_view>
+#include <filesystem>
+#include <algorithm>
+#include <cstdio>
+#include <fstream>
+#include <filesystem>
+#include <mutex>
+#include <iterator>
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_init.h>
@@ -6,11 +16,9 @@
 #include <imgui/imgui.h>
 #include <imgui/backends/imgui_impl_sdl3.h>
 #include <imgui/backends/imgui_impl_sdlrenderer3.h>
-#include <cmath>
-#include <string_view>
-#include <filesystem>
-#include <algorithm>
-#include <cstdio>
+
+#include "xtce_blue.h"
+
 #include "gui/imgui_memory_editor.h"
 #include "gui/DebuggerWindow.h"
 #include "gui/DebuggerManager.h"
@@ -22,16 +30,13 @@
 #include "gui/PicStatusWindow.h"
 #include "gui/DmacStatusWindow.h"
 #include "gui/DisplayDebugWindow.h"
-
-#include "littleblue.h"
-#include "core/Machine.h"
 #include "gui/CpuStatusWindow.h"
+
+#include "core/Machine.h"
+
 #include "frontend/DisplayRenderer.h"
 #include "frontend/keyboard.h"
-#include <fstream>
-#include <filesystem>
-#include <mutex>
-#include <iterator>
+
 
 // Forward declare the callback we'll register with SDL_ShowOpenFileDialog
 static void FileDialogCallback(void* userdata, const char* const* filelist, int filter_index);
@@ -117,7 +122,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     // Create a window
     SDL_Window* window =
         SDL_CreateWindow(
-            "LittleBlue",
+            "XTCE-Blue",
             windowStartWidth,
             windowStartHeight,
             SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);

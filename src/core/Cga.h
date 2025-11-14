@@ -208,70 +208,70 @@ public:
     }
 
     void reset() {
-        cgaPhase_ = 0;
+        cga_phase_ = 0;
         crtc_.reset();
         memset(vram_, 0, sizeof(vram_));
         memset(buf_, 0, sizeof(buf_));
-        backBuf_ = 0;
-        frontBuf_ = 1;
+        back_buf_ = 0;
+        front_buf_ = 1;
 
-        cgaPhase_ = 0;
+        cga_phase_ = 0;
         ticks_ = 0;
 
-        clockDivisor_ = 1;
-        charClock_ = HCHAR_CLOCK;
-        charClockMask_ = HCHAR_CLOCK_MASK;
-        charClockOddMask_ = LCHAR_CLOCK_MASK;
+        clock_divisor_ = 1;
+        char_clock_ = HCHAR_CLOCK;
+        char_clock_mask_ = HCHAR_CLOCK_MASK;
+        char_clock_odd_mask_ = LCHAR_CLOCK_MASK;
 
         vma_ = 0;
         rba_ = 0;
 
-        lpLatch_ = false;
-        lpSwitch_ = false;
+        lp_latch_ = false;
+        lp_switch_ = false;
 
-        cursorBlink_ = false;
-        cursorStatus_ = false;
-        blinkState_ = false;
+        cursor_blink_ = false;
+        cursor_status_ = false;
+        blink_state_ = false;
 
-        modeByte_ = 0;
-        modePending_ = false;
-        clockPending_ = false;
-        modeEnable_ = false;
-        modeBW_ = false;
-        modeGraphics_ = false;
-        modeBlinking_ = false;
-        modeHiresGfx_ = false;
-        modeHiresText_ = false;
+        mode_byte_ = 0;
+        mode_pending_ = false;
+        clock_pending_ = false;
+        mode_enable_ = false;
+        mode_bw_ = false;
+        mode_graphics_ = false;
+        mode_blinking_ = false;
+        mode_hires_gfx_ = false;
+        mode_hires_text_ = false;
 
-        monitorHSync_ = false;
-        monitorVSync_ = false;
-        beamX_ = 0;
-        beamY_ = 0;
+        monitor_hsync_ = false;
+        monitor_vsync_ = false;
+        beam_x_ = 0;
+        beam_y_ = 0;
         scanline_ = 0;
 
-        curFg_ = 0;
-        curBg_ = 0;
-        ccRegisterByte_ = 0;
-        ccOverscanColor_ = 0;
-        ccAltColor_ = 0;
-        ccPalette_ = 0;
-        curChar_ = 0;
-        curAttr_ = 0;
+        cur_fg_ = 0;
+        cur_bg_ = 0;
+        cc_register_byte_ = 0;
+        cc_overscan_color_ = 0;
+        cc_alt_color_ = 0;
+        cc_palette_ = 0;
+        cur_char_ = 0;
+        cur_attr_ = 0;
 
-        frameCount_ = 0;
+        frame_count_ = 0;
     }
 
     CgaDebugState getDebugState() const {
         CgaDebugState state{};
-        state.mode_byte = modeByte_;
-        state.mode_hires_text = modeHiresText_;
-        state.mode_graphics = modeGraphics_;
-        state.mode_bw = modeBW_;
-        state.mode_enable = modeEnable_;
-        state.mode_hires_gfx = modeHiresGfx_;
-        state.mode_blinking = modeBlinking_;
-        state.cc_register_byte = ccRegisterByte_;
-        state.clock_divisor = static_cast<uint8_t>(clockDivisor_);
+        state.mode_byte = mode_byte_;
+        state.mode_hires_text = mode_hires_text_;
+        state.mode_graphics = mode_graphics_;
+        state.mode_bw = mode_bw_;
+        state.mode_enable = mode_enable_;
+        state.mode_hires_gfx = mode_hires_gfx_;
+        state.mode_blinking = mode_blinking_;
+        state.cc_register_byte = cc_register_byte_;
+        state.clock_divisor = static_cast<uint8_t>(clock_divisor_);
         return state;
     }
 
@@ -308,18 +308,18 @@ public:
     void writeColorControlRegister(uint8_t data);
 
     void clearLPLatch() {
-        lpLatch_ = false;
+        lp_latch_ = false;
     }
 
     void setLPLatch() {
-        lpLatch_ = true;
+        lp_latch_ = true;
     };
 
     void tick() {
         ticks_++;
-        if ((ticks_ & charClockMask_) == 0) {
+        if ((ticks_ & char_clock_mask_) == 0) {
 
-            if (clockDivisor_ == 2) {
+            if (clock_divisor_ == 2) {
                 tick_lchar();
             }
             else {
@@ -340,7 +340,7 @@ public:
             fetch_char();
             updateClock();
         }
-        cgaPhase_ = (cgaPhase_ + 3) & 0x0f;
+        cga_phase_ = (cga_phase_ + 3) & 0x0f;
     }
 
     static std::string getRegisterName(const int reg) {
@@ -348,44 +348,38 @@ public:
             case 0:
                 return "Horizontal Total";
             case 1:
-                return "Horizontal Display Enable End";
+                return "Horizontal Displayed";
             case 2:
-                return "Horizontal Blank Start";
-            case 3:
-                return "Horizontal Blank End";
-            case 4:
                 return "Horizontal Sync Position";
-            case 5:
+            case 3:
                 return "Horizontal Sync Width";
-            case 6:
+            case 4:
                 return "Vertical Total";
-            case 7:
+            case 5:
                 return "Vertical Total Adjust";
-            case 8:
-                return "Vertical Display Enable End";
-            case 9:
-                return "Vertical Blank Start";
-            case 10:
-                return "Vertical Blank End";
-            case 11:
+            case 6:
+                return "Vertical Displayed";
+            case 7:
                 return "Vertical Sync Position";
-            case 12:
+            case 8:
+                return "Interlace Mode";
+            case 9:
                 return "Max Scan Line Address";
-            case 13:
+            case 10:
                 return "Cursor Start";
-            case 14:
+            case 11:
                 return "Cursor End";
-            case 15:
+            case 12:
                 return "Start Address (High)";
-            case 16:
+            case 13:
                 return "Start Address (Low)";
-            case 17:
+            case 14:
                 return "Cursor Address (High)";
-            case 18:
+            case 15:
                 return "Cursor Address (Low)";
-            case 19:
+            case 16:
                 return "Light Pen Address (High)";
-            case 20:
+            case 17:
                 return "Light Pen Address (Low)";
             default:
                 return "Unknown Register";
@@ -398,63 +392,63 @@ private:
     void updateClock();
 
     alignas(8) uint8_t vram_[VRAM_SIZE]{};
-    bool cursorData_[CGA_CURSOR_MAX]{};
+    bool cursor_data_[CGA_CURSOR_MAX]{};
     uint8_t buf_[2][CGA_MAX_CLOCK]{};
-    size_t backBuf_{0};
-    size_t frontBuf_{1};
+    size_t back_buf_{0};
+    size_t front_buf_{1};
 
     Crtc6845 crtc_{};
-    uint8_t cgaPhase_{0};
+    uint8_t cga_phase_{0};
     uint64_t ticks_{0};
 
-    int clockDivisor_{1};
-    uint64_t charClock_{HCHAR_CLOCK};
-    uint64_t charClockMask_{HCHAR_CLOCK_MASK};
-    uint64_t charClockOddMask_{LCHAR_CLOCK_MASK};
+    int clock_divisor_{1};
+    uint64_t char_clock_{HCHAR_CLOCK};
+    uint64_t char_clock_mask_{HCHAR_CLOCK_MASK};
+    uint64_t char_clock_odd_mask_{LCHAR_CLOCK_MASK};
 
     size_t vma_{0};
     size_t rba_{0}; // raster buffer address
 
     // Light pen state
-    bool lpLatch_{false};
-    bool lpSwitch_{false};
+    bool lp_latch_{false};
+    bool lp_switch_{false};
 
     // Cursor state
-    bool cursorBlink_{false};
-    bool cursorStatus_{false};
-    bool blinkState_{false};
+    bool cursor_blink_{false};
+    bool cursor_status_{false};
+    bool blink_state_{false};
 
     // Mode register bits
-    uint8_t modeByte_{0};
-    bool modePending_{false};
-    bool clockPending_{false};
-    bool modeEnable_{false};
-    bool modeBW_{false};
-    bool modeGraphics_{false};
-    bool modeBlinking_{false};
-    bool modeHiresGfx_{false};
-    bool modeHiresText_{false};
+    uint8_t mode_byte_{0};
+    bool mode_pending_{false};
+    bool clock_pending_{false};
+    bool mode_enable_{false};
+    bool mode_bw_{false};
+    bool mode_graphics_{false};
+    bool mode_blinking_{false};
+    bool mode_hires_gfx_{false};
+    bool mode_hires_text_{false};
 
     // Monitor simulation
-    bool monitorHSync_{false};
-    bool monitorVSync_{false};
-    uint32_t beamX_{0};
-    uint32_t beamY_{0};
+    bool monitor_hsync_{false};
+    bool monitor_vsync_{false};
+    uint32_t beam_x_{0};
+    uint32_t beam_y_{0};
     uint32_t scanline_{0};
     // Colors, character and attribute
 
     // Current foreground color
-    uint8_t curFg_{0};
+    uint8_t cur_fg_{0};
     // Current background color
-    uint8_t curBg_{0};
-    uint8_t ccRegisterByte_{0};
-    uint8_t ccOverscanColor_{0};
-    uint8_t ccAltColor_{0};
-    uint8_t ccPalette_{0};
-    uint8_t curChar_{0};
-    uint8_t curAttr_{0};
+    uint8_t cur_bg_{0};
+    uint8_t cc_register_byte_{0};
+    uint8_t cc_overscan_color_{0};
+    uint8_t cc_alt_color_{0};
+    uint8_t cc_palette_{0};
+    uint8_t cur_char_{0};
+    uint8_t cur_attr_{0};
 
-    uint64_t frameCount_{0};
+    uint64_t frame_count_{0};
 
 
     static constexpr auto CGA_LOWRES_GFX_TABLE = makeCgaLowresGraphicsTable();
@@ -479,11 +473,11 @@ private:
         if (rba_ < (CGA_MAX_CLOCK - 16)) {
             if (crtc_.den()) {
                 // Draw current character row
-                if (!modeGraphics_) {
+                if (!mode_graphics_) {
                     //std::cout << "CGA: Drawing text mode char at rba=" << rba_ << "\n";
                     draw_text_mode_lchar();
                 }
-                else if (modeHiresGfx_) {
+                else if (mode_hires_gfx_) {
                     //draw_hires_gfx_mode_char();
                 }
                 else {
@@ -495,16 +489,16 @@ private:
             }
 
             // Update position to next pixel and character column.
-            beamX_ += 8 * clockDivisor_;
-            rba_ += 8 * clockDivisor_;
+            beam_x_ += 8 * clock_divisor_;
+            rba_ += 8 * clock_divisor_;
 
             // If we have reached the right edge of the 'monitor', return the raster position
             // to the left side of the screen.
-            if (beamX_ >= CGA_XRES_MAX) {
-                beamX_ = 0;
-                beamY_ += 1;
-                monitorVSync_ = false;
-                rba_ = CGA_XRES_MAX * beamY_;
+            if (beam_x_ >= CGA_XRES_MAX) {
+                beam_x_ = 0;
+                beam_y_ += 1;
+                monitor_vsync_ = false;
+                rba_ = CGA_XRES_MAX * beam_y_;
             }
         }
     }
@@ -515,15 +509,15 @@ private:
         if (rba_ < (CGA_MAX_CLOCK - 8)) {
             if (crtc_.den()) {
                 // Draw current character row
-                if (!modeGraphics_) {
+                if (!mode_graphics_) {
                     //std::cout << "CGA: Drawing text mode char at rba=" << rba_ << "\n";
                     draw_text_mode_hchar();
                 }
-                else if (modeHiresGfx_) {
+                else if (mode_hires_gfx_) {
                     //draw_hires_gfx_mode_char();
                 }
                 else {
-                    draw_solid_hchar(ccOverscanColor_);
+                    draw_solid_hchar(cc_overscan_color_);
                 }
             }
             else {
@@ -531,16 +525,16 @@ private:
             }
 
             // Update position to next pixel and character column.
-            beamX_ += 8 * clockDivisor_;
-            rba_ += 8 * clockDivisor_;
+            beam_x_ += 8 * clock_divisor_;
+            rba_ += 8 * clock_divisor_;
 
             // If we have reached the right edge of the 'monitor', return the raster position
             // to the left side of the screen.
-            if (beamX_ >= CGA_XRES_MAX) {
-                beamX_ = 0;
-                beamY_ += 1;
-                monitorVSync_ = false;
-                rba_ = CGA_XRES_MAX * beamY_;
+            if (beam_x_ >= CGA_XRES_MAX) {
+                beam_x_ = 0;
+                beam_y_ += 1;
+                monitor_vsync_ = false;
+                rba_ = CGA_XRES_MAX * beam_y_;
             }
         }
     }
@@ -548,31 +542,31 @@ private:
 
     // ReSharper disable once CppMemberFunctionMayBeConst
     void draw_solid_hchar(const uint8_t color) {
-        const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[backBuf_]);
+        const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[back_buf_]);
         frame_u64[rba_ >> 3] = CGA_COLORS_U64[color & 0x0F];
     }
 
     // ReSharper disable once CppMemberFunctionMayBeConst
     void draw_solid_lchar(const uint8_t color) {
-        const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[backBuf_]);
+        const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[back_buf_]);
         frame_u64[rba_ >> 3] = CGA_COLORS_U64[(color & 0x0F)];
         frame_u64[(rba_ >> 3) + 1] = CGA_COLORS_U64[(color & 0x0F)];
     }
 
     [[nodiscard]] uint64_t get_hchar_glyph_row(const uint8_t glyph, const uint8_t row) const {
-        if (cursorBlink_ && !cursorStatus_) {
-            return CGA_COLORS_U64[curBg_];
+        if (cursor_blink_ && !cursor_status_) {
+            return CGA_COLORS_U64[cur_bg_];
         }
 
         const auto glyph_row_base = CGA_HIRES_GLYPH_TABLE[glyph & 0xFF][row & 0x07];
 
         // Combine glyph mask with foreground and background colors.
-        return glyph_row_base & CGA_COLORS_U64[curFg_] | ~glyph_row_base & CGA_COLORS_U64[curBg_];
+        return glyph_row_base & CGA_COLORS_U64[cur_fg_] | ~glyph_row_base & CGA_COLORS_U64[cur_bg_];
     }
 
     [[nodiscard]] std::pair<uint64_t, uint64_t> get_lchar_glyph_rows(const uint8_t glyph, const uint8_t row) const {
-        if (cursorBlink_ && !cursorStatus_) {
-            const uint64_t bg = CGA_COLORS_U64[curBg_];
+        if (cursor_blink_ && !cursor_status_) {
+            const uint64_t bg = CGA_COLORS_U64[cur_bg_];
             return {bg, bg};
         }
 
@@ -582,11 +576,11 @@ private:
 
         // Apply foreground/background colors to each half
         const uint64_t row0 =
-            (glyph_row_base_0 & CGA_COLORS_U64[curFg_])
-            | (~glyph_row_base_0 & CGA_COLORS_U64[curBg_]);
+            (glyph_row_base_0 & CGA_COLORS_U64[cur_fg_])
+            | (~glyph_row_base_0 & CGA_COLORS_U64[cur_bg_]);
         const uint64_t row1 =
-            (glyph_row_base_1 & CGA_COLORS_U64[curFg_])
-            | (~glyph_row_base_1 & CGA_COLORS_U64[curBg_]);
+            (glyph_row_base_1 & CGA_COLORS_U64[cur_fg_])
+            | (~glyph_row_base_1 & CGA_COLORS_U64[cur_bg_]);
 
         return {row0, row1};
 
@@ -596,15 +590,15 @@ private:
     void draw_text_mode_hchar() {
         // Do cursor if visible, enabled and defined
         if (vma_ == crtc_.cursor_address()
-            && cursorStatus_
-            && blinkState_
-            && cursorData_[(crtc_.vlc() & 0x1F)]) {
-            draw_solid_hchar(curFg_);
+            && cursor_status_
+            && blink_state_
+            && cursor_data_[(crtc_.vlc() & 0x1F)]) {
+            draw_solid_hchar(cur_fg_);
         }
-        else if (modeEnable_) {
+        else if (mode_enable_) {
             // Get the u64 glyph row to draw for the current fg and bg colors and character row (vlc)
-            const auto glyph_row = get_hchar_glyph_row(curChar_, crtc_.vlc());
-            const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[backBuf_]);
+            const auto glyph_row = get_hchar_glyph_row(cur_char_, crtc_.vlc());
+            const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[back_buf_]);
             frame_u64[rba_ >> 3] = glyph_row;
         }
         else {
@@ -616,15 +610,15 @@ private:
     void draw_text_mode_lchar() {
         // Do cursor if visible, enabled and defined
         if (vma_ == crtc_.cursor_address()
-            && cursorStatus_
-            && blinkState_
-            && cursorData_[(crtc_.vlc() & 0x1F)]) {
-            draw_solid_hchar(curFg_);
+            && cursor_status_
+            && blink_state_
+            && cursor_data_[(crtc_.vlc() & 0x1F)]) {
+            draw_solid_hchar(cur_fg_);
         }
-        else if (modeEnable_) {
+        else if (mode_enable_) {
             // Get the two u64 glyph row components to draw for the current fg and bg colors and character row (vlc)
-            const auto rows = get_lchar_glyph_rows(curChar_, crtc_.vlc());
-            const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[backBuf_]);
+            const auto rows = get_lchar_glyph_rows(cur_char_, crtc_.vlc());
+            const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[back_buf_]);
             frame_u64[rba_ >> 3] = rows.first;
             frame_u64[(rba_ >> 3) + 1] = rows.second;
         }
@@ -643,24 +637,24 @@ private:
     void get_lowres_gfx_lchar(uint8_t row, uint64_t& c0, uint64_t& c1, uint64_t& m0, uint64_t& m1) const {
 
         auto base_addr = get_gfx_addr(row);
-        c0 = CGA_LOWRES_GFX_TABLE[ccPalette_][vram_[base_addr]].first;
-        m0 = CGA_LOWRES_GFX_TABLE[ccPalette_][vram_[base_addr]].second;
-        c1 = CGA_LOWRES_GFX_TABLE[ccPalette_][vram_[base_addr + 1]].first;
-        m1 = CGA_LOWRES_GFX_TABLE[ccPalette_][vram_[base_addr + 1]].second;
+        c0 = CGA_LOWRES_GFX_TABLE[cc_palette_][vram_[base_addr]].first;
+        m0 = CGA_LOWRES_GFX_TABLE[cc_palette_][vram_[base_addr]].second;
+        c1 = CGA_LOWRES_GFX_TABLE[cc_palette_][vram_[base_addr + 1]].first;
+        m1 = CGA_LOWRES_GFX_TABLE[cc_palette_][vram_[base_addr + 1]].second;
 
     }
 
     void draw_lowres_gfx_mode_char() {
-        if (modeEnable_) {
+        if (mode_enable_) {
             uint64_t c0, c1, m0, m1;
             get_lowres_gfx_lchar(crtc_.vlc(), c0, c1, m0, m1);
 
-            const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[backBuf_]);
-            frame_u64[rba_ >> 3] = c0 | (m0 & CGA_COLORS_U64[ccAltColor_]);
-            frame_u64[(rba_ >> 3) + 1] = c1 | (m1 & CGA_COLORS_U64[ccAltColor_]);
+            const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[back_buf_]);
+            frame_u64[rba_ >> 3] = c0 | (m0 & CGA_COLORS_U64[cc_alt_color_]);
+            frame_u64[(rba_ >> 3) + 1] = c1 | (m1 & CGA_COLORS_U64[cc_alt_color_]);
         }
         else {
-            draw_solid_lchar(ccAltColor_);
+            draw_solid_lchar(cc_alt_color_);
         }
     }
 
@@ -669,45 +663,45 @@ private:
         // Address from CRTC is masked by 0x1FFF by the CGA card (bit 13 ignored) and doubled.
         const auto addr = (vma_ & CGA_TEXT_MODE_WRAP) << 1;
 
-        curChar_ = vram_[addr];
-        curAttr_ = vram_[addr + 1];
-        curFg_ = curAttr_ & 0x0F;
+        cur_char_ = vram_[addr];
+        cur_attr_ = vram_[addr + 1];
+        cur_fg_ = cur_attr_ & 0x0F;
 
         // If blinking is enabled, the bg attribute is only 3 bits and only low-intensity colors are available.
         // If blinking is disabled, all 16 colors are available as background attributes.
-        if (modeBlinking_) {
-            curBg_ = (curAttr_ >> 4) & 0x07;
-            cursorBlink_ = (curAttr_ & 0x80) != 0;
+        if (mode_blinking_) {
+            cur_bg_ = (cur_attr_ >> 4) & 0x07;
+            cursor_blink_ = (cur_attr_ & 0x80) != 0;
         }
         else {
-            curBg_ = (curAttr_ >> 4);
-            cursorBlink_ = false;
+            cur_bg_ = (cur_attr_ >> 4);
+            cursor_blink_ = false;
         }
     }
 
     void hsync() {
         scanline_ += 1;
         // Reset beam to left of screen if we haven't already
-        if (beamX_ > 0) {
-            beamY_++;
+        if (beam_x_ > 0) {
+            beam_y_++;
         }
-        beamX_ = 0;
-        rba_ = CGA_XRES_MAX * beamY_;
+        beam_x_ = 0;
+        rba_ = CGA_XRES_MAX * beam_y_;
     }
 
     void vsync() {
         // Only do a vsync if we are past the minimum scanline #.
         // A monitor will refuse to vsync too quickly.
-        if (beamY_ > CGA_MONITOR_VSYNC_MIN) {
-            beamX_ = 0;
-            beamY_ = 0;
+        if (beam_y_ > CGA_MONITOR_VSYNC_MIN) {
+            beam_x_ = 0;
+            beam_y_ = 0;
             rba_ = 0;
             scanline_ = 0;
-            frameCount_++;
+            frame_count_++;
 
             // Toggle blink state. This is toggled every 8 frames by default.
-            if ((frameCount_ % CGA_DEFAULT_CURSOR_FRAME_CYCLE) == 0) {
-                cursorBlink_ = !cursorBlink_;
+            if ((frame_count_ % CGA_DEFAULT_CURSOR_FRAME_CYCLE) == 0) {
+                cursor_blink_ = !cursor_blink_;
             }
 
             // Swap the display buffers
@@ -717,17 +711,15 @@ private:
     }
 
     void swap() {
-        if (backBuf_ == 0) {
-            frontBuf_ = 0;
-            backBuf_ = 1;
+        if (back_buf_ == 0) {
+            front_buf_ = 0;
+            back_buf_ = 1;
         }
         else {
-            frontBuf_ = 1;
-            backBuf_ = 0;
+            front_buf_ = 1;
+            back_buf_ = 0;
         }
         // Clear new back buffer.
-        memset(&buf_[backBuf_], 0, sizeof(buf_[0]));
+        memset(&buf_[back_buf_], 0, sizeof(buf_[0]));
     }
-
-
 };

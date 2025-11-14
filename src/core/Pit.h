@@ -7,13 +7,13 @@ class PIT
 public:
     void reset() {
         for (int i = 0; i < 3; ++i) {
-            _counters[i].reset();
+            counters_[i].reset();
         }
     }
 
     void stubInit() {
         for (int i = 0; i < 3; ++i) {
-            _counters[i].stubInit();
+            counters_[i].stubInit();
         }
     }
 
@@ -23,31 +23,31 @@ public:
             if (counter == 3) {
                 return;
             }
-            _counters[counter].control(data & 0x3f);
+            counters_[counter].control(data & 0x3f);
         }
         else
-            _counters[address].write(data);
+            counters_[address].write(data);
     }
 
     uint8_t read(const uint32_t address) {
         if (address == 3) {
             return 0xff;
         }
-        return _counters[address].read();
+        return counters_[address].read();
     }
 
     void wait() {
         for (int i = 0; i < 3; ++i) {
-            _counters[i].wait();
+            counters_[i].wait();
         }
     }
 
     void setGate(const int counter, const bool gate) {
-        _counters[counter].setGate(gate);
+        counters_[counter].setGate(gate);
     }
 
     [[nodiscard]] bool getOutput(const int counter) const {
-        return _counters[counter]._output;
+        return counters_[counter].output;
     }
 
     //int getMode(int counter) { return _counters[counter]._control; }
@@ -65,52 +65,50 @@ private:
     struct Counter
     {
         void reset() {
-            _value = 0;
-            _count = 0;
-            _firstByte = true;
-            _latched = false;
-            _output = true;
-            _control = 0x30;
-            _state = stateWaitingForCount;
+            value = 0;
+            count = 0;
+            first_byte = true;
+            latched = false;
+            output = true;
+            control_byte = 0x30;
+            state = stateWaitingForCount;
         }
 
         void stubInit() {
-            _value = 0xffff;
-            _count = 0xffff;
-            _firstByte = true;
-            _latched = false;
-            _output = true;
-            _control = 0x34;
-            _state = stateCounting;
-            _gate = true;
+            value = 0xffff;
+            count = 0xffff;
+            first_byte = true;
+            latched = false;
+            output = true;
+            control_byte = 0x34;
+            state = stateCounting;
+            gate = true;
         }
 
         void write(const uint8_t data) {
-            _writeByte = data;
-            _haveWriteByte = true;
+            write_byte = data;
+            have_write_byte = true;
         }
 
         uint8_t read() {
-            if (!_latched) {
-                // TODO: corrupt countdown in a deterministic but
-                // non-trivial way.
-                _latch = _count;
+            if (!latched) {
+                latch = count;
             }
-            switch (_control & 0x30) {
+            switch (control_byte & 0x30) {
                 case 0x10:
-                    _latched = false;
-                    return _latch & 0xff;
+                    latched = false;
+                    return latch & 0xff;
                 case 0x20:
-                    _latched = false;
-                    return _latch >> 8;
+                    latched = false;
+                    return latch >> 8;
                 case 0x30:
-                    if (_firstByte) {
-                        _firstByte = false;
-                        return _latch & 0xff;
+                    if (first_byte) {
+                        first_byte = false;
+                        return latch & 0xff;
                     }
-                    _firstByte = true;
-                    _latched = false;
-                    return _latch >> 8;
+                    first_byte = true;
+                    latched = false;
+                    return latch >> 8;
                 default:
                     break;
             }
@@ -119,137 +117,141 @@ private:
         }
 
         void wait() {
-            switch (_control & 0x0e) {
+            switch (control_byte & 0x0e) {
                 case 0x00: // Interrupt on Terminal Count
-                    if (_state == stateLoadDelay) {
-                        _state = stateCounting;
-                        _value = _count;
+                    if (state == stateLoadDelay) {
+                        state = stateCounting;
+                        value = count;
                         break;
                     }
-                    if (_gate && _state == stateCounting) {
+                    if (gate && state == stateCounting) {
                         countDown();
-                        if (_value == 0)
-                            _output = true;
+                        if (value == 0) {
+                            output = true;
+                        }
                     }
                     break;
                 case 0x02: // Programmable One-Shot
-                    if (_state == stateLoadDelay) {
-                        _state = stateWaitingForGate;
+                    if (state == stateLoadDelay) {
+                        state = stateWaitingForGate;
                         break;
                     }
-                    if (_state == stateGateRose) {
-                        _output = false;
-                        _value = _count;
-                        _state = stateCounting;
+                    if (state == stateGateRose) {
+                        output = false;
+                        value = count;
+                        state = stateCounting;
                     }
                     countDown();
-                    if (_value == 0) {
-                        _output = true;
-                        _state = stateWaitingForGate;
+                    if (value == 0) {
+                        output = true;
+                        state = stateWaitingForGate;
                     }
                     break;
                 case 0x04:
                 case 0x0c: // Rate Generator
-                    if (_state == stateLoadDelay) {
-                        _state = stateCounting;
-                        _value = _count;
+                    if (state == stateLoadDelay) {
+                        state = stateCounting;
+                        value = count;
                         break;
                     }
-                    if (_gate && _state == stateCounting) {
+                    if (gate && state == stateCounting) {
                         countDown();
-                        if (_value == 1)
-                            _output = false;
-                        if (_value == 0) {
-                            _output = true;
-                            _value = _count;
+                        if (value == 1) {
+                            output = false;
+                        }
+                        if (value == 0) {
+                            output = true;
+                            value = count;
                         }
                     }
                     break;
                 case 0x06:
                 case 0x0e: // Square Wave Rate Generator
-                    if (_state == stateLoadDelay) {
-                        _state = stateCounting;
-                        _value = _count;
+                    if (state == stateLoadDelay) {
+                        state = stateCounting;
+                        value = count;
                         break;
                     }
-                    if (_gate && _state == stateCounting) {
-                        if ((_value & 1) != 0) {
-                            if (!_output) {
+                    if (gate && state == stateCounting) {
+                        if ((value & 1) != 0) {
+                            if (!output) {
                                 countDown();
                                 countDown();
                             }
                         }
-                        else
+                        else {
                             countDown();
+                        }
                         countDown();
-                        if (_value == 0) {
-                            _output = !_output;
-                            _value = _count;
+                        if (value == 0) {
+                            output = !output;
+                            value = count;
                         }
                     }
                     break;
                 case 0x08: // Software Triggered Strobe
-                    if (_state == stateLoadDelay) {
-                        _state = stateCounting;
-                        _value = _count;
+                    if (state == stateLoadDelay) {
+                        state = stateCounting;
+                        value = count;
                         break;
                     }
-                    if (_state == statePulsing) {
-                        _output = true;
-                        _state = stateWaitingForCount;
+                    if (state == statePulsing) {
+                        output = true;
+                        state = stateWaitingForCount;
                     }
-                    if (_gate && _state == stateCounting) {
+                    if (gate && state == stateCounting) {
                         countDown();
-                        if (_value == 0) {
-                            _output = false;
-                            _state = statePulsing;
+                        if (value == 0) {
+                            output = false;
+                            state = statePulsing;
                         }
                     }
                     break;
                 case 0x0a: // Hardware Triggered Strobe
-                    if (_state == stateLoadDelay) {
-                        _state = stateWaitingForGate;
+                    if (state == stateLoadDelay) {
+                        state = stateWaitingForGate;
                         break;
                     }
-                    if (_state == statePulsing) {
-                        _output = true;
-                        _state = stateWaitingForCount;
+                    if (state == statePulsing) {
+                        output = true;
+                        state = stateWaitingForCount;
                     }
-                    if (_state == stateGateRose) {
-                        _output = false;
-                        _value = _count;
-                        _state = stateCounting;
+                    if (state == stateGateRose) {
+                        output = false;
+                        value = count;
+                        state = stateCounting;
                     }
-                    if (_state == stateCounting) {
+                    if (state == stateCounting) {
                         countDown();
-                        if (_value == 1)
-                            _output = false;
-                        if (_value == 0) {
-                            _output = true;
-                            _state = stateWaitingForGate;
+                        if (value == 1) {
+                            output = false;
+                        }
+                        if (value == 0) {
+                            output = true;
+                            state = stateWaitingForGate;
                         }
                     }
                     break;
                 default:
                     break;
             }
-            if (_haveWriteByte) {
-                _haveWriteByte = false;
-                switch (_control & 0x30) {
+            if (have_write_byte) {
+                have_write_byte = false;
+                switch (control_byte & 0x30) {
                     case 0x10:
-                        load(_writeByte);
+                        load(write_byte);
                         break;
                     case 0x20:
-                        load(_writeByte << 8);
+                        load(write_byte << 8);
                         break;
                     case 0x30:
-                        if (_firstByte) {
-                            _lowByte = _writeByte;
-                            _firstByte = false;
+                        if (first_byte) {
+                            low_byte = write_byte;
+                            first_byte = false;
                         }
                         else {
-                            load((_writeByte << 8) + _lowByte);
-                            _firstByte = true;
+                            load((write_byte << 8) + low_byte);
+                            first_byte = true;
                         }
                         break;
                     default:
@@ -259,158 +261,164 @@ private:
         }
 
         void countDown() {
-            if ((_control & 1) == 0) {
-                --_value;
+            if ((control_byte & 1) == 0) {
+                --value;
                 return;
             }
-            if ((_value & 0xf) != 0) {
-                --_value;
+            if ((value & 0xf) != 0) {
+                --value;
                 return;
             }
-            if ((_value & 0xf0) != 0) {
-                _value -= (0x10 - 9);
+            if ((value & 0xf0) != 0) {
+                value -= (0x10 - 9);
                 return;
             }
-            if ((_value & 0xf00) != 0) {
-                _value -= (0x100 - 0x99);
+            if ((value & 0xf00) != 0) {
+                value -= (0x100 - 0x99);
                 return;
             }
-            _value -= (0x1000 - 0x999);
+            value -= (0x1000 - 0x999);
         }
 
-        void load(uint16_t count) {
-            _count = count;
-            switch (_control & 0x0e) {
+        void load(const uint16_t new_count) {
+            count = new_count;
+            switch (control_byte & 0x0e) {
                 case 0x00: // Interrupt on Terminal Count
-                    if (_state == stateWaitingForCount) {
-                        _state = stateLoadDelay;
+                    if (state == stateWaitingForCount) {
+                        state = stateLoadDelay;
                     }
-                    _output = false;
+                    output = false;
                     break;
                 case 0x02: // Programmable One-Shot
-                    if (_state != stateCounting) {
-                        _state = stateLoadDelay;
+                    if (state != stateCounting) {
+                        state = stateLoadDelay;
                     }
                     break;
                 case 0x04:
                 case 0x0c: // Rate Generator
-                    if (_state == stateWaitingForCount)
-                        _state = stateLoadDelay;
+                    if (state == stateWaitingForCount) {
+                        state = stateLoadDelay;
+                    }
                     break;
                 case 0x06:
                 case 0x0e: // Square Wave Rate Generator
-                    if (_state == stateWaitingForCount)
-                        _state = stateLoadDelay;
+                    if (state == stateWaitingForCount) {
+                        state = stateLoadDelay;
+                    }
 
                     break;
                 case 0x08: // Software Triggered Strobe
-                    if (_state == stateWaitingForCount)
-                        _state = stateLoadDelay;
+                    if (state == stateWaitingForCount) {
+                        state = stateLoadDelay;
+                    }
                     break;
                 case 0x0a: // Hardware Triggered Strobe
-                    if (_state != stateCounting)
-                        _state = stateLoadDelay;
-                    break;
-            }
-        }
-
-        void control(uint8_t control) {
-            int command = control & 0x30;
-            if (command == 0) {
-                _latch = _value;
-                _latched = true;
-                return;
-            }
-            _control = control;
-            _firstByte = true;
-            _latched = false;
-            _state = stateWaitingForCount;
-            switch (_control & 0x0e) {
-                case 0x00: // Interrupt on Terminal Count
-                    _output = false;
-                    break;
-                case 0x02: // Programmable One-Shot
-                    _output = true;
-                    break;
-                case 0x04:
-                case 0x0c: // Rate Generator
-                    _output = true;
-                    break;
-                case 0x06:
-                case 0x0e: // Square Wave Rate Generator
-                    _output = true;
-                    break;
-                case 0x08: // Software Triggered Strobe
-                    _output = true;
-                    break;
-                case 0x0a: // Hardware Triggered Strobe
-                    _output = true;
+                    if (state != stateCounting) {
+                        state = stateLoadDelay;
+                    }
                     break;
                 default:
                     break;
             }
         }
 
-        void setGate(const bool gate) {
-            if (_gate == gate) {
+        void control(const uint8_t control) {
+            int command = control & 0x30;
+            if (command == 0) {
+                latch = value;
+                latched = true;
+                return;
+            }
+            control_byte = control;
+            first_byte = true;
+            latched = false;
+            state = stateWaitingForCount;
+            switch (control_byte & 0x0e) {
+                case 0x00: // Interrupt on Terminal Count
+                    output = false;
+                    break;
+                case 0x02: // Programmable One-Shot
+                    output = true;
+                    break;
+                case 0x04:
+                case 0x0c: // Rate Generator
+                    output = true;
+                    break;
+                case 0x06:
+                case 0x0e: // Square Wave Rate Generator
+                    output = true;
+                    break;
+                case 0x08: // Software Triggered Strobe
+                    output = true;
+                    break;
+                case 0x0a: // Hardware Triggered Strobe
+                    output = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        void setGate(const bool new_gate) {
+            if (gate == new_gate) {
                 // No change
                 return;
             }
 
-            switch (_control & 0x0e) {
+            switch (control_byte & 0x0e) {
                 case 0x00: // Interrupt on Terminal Count
                     break;
                 case 0x02: // Programmable One-Shot
-                    if (gate) {
-                        _state = stateGateRose;
+                    if (new_gate) {
+                        state = stateGateRose;
                     }
                     break;
                 case 0x04:
                 case 0x0c: // Rate Generator
-                    if (!gate) {
-                        _output = true;
+                    if (!new_gate) {
+                        output = true;
                     }
                     else {
-                        _value = _count;
+                        value = count;
                     }
                     break;
                 case 0x06:
                 case 0x0e: // Square Wave Rate Generator
-                    if (!gate) {
-                        _output = true;
+                    if (!new_gate) {
+                        output = true;
                     }
                     else {
-                        _value = _count;
+                        value = count;
                     }
                     break;
                 case 0x08: // Software Triggered Strobe
                     break;
                 case 0x0a: // Hardware Triggered Strobe
-                    if (gate) {
-                        _state = stateGateRose;
+                    if (new_gate) {
+                        state = stateGateRose;
                     }
                     break;
                 default:
                     break;
             }
-            _gate = gate;
+            gate = new_gate;
         }
 
-        uint16_t _count;
-        uint16_t _value;
-        uint16_t _latch;
-        uint8_t _control;
-        uint8_t _lowByte;
-        bool _gate;
-        bool _output;
-        bool _firstByte;
-        bool _latched;
-        State _state;
-        uint8_t _writeByte;
-        bool _haveWriteByte;
+        uint16_t count;
+        uint16_t value;
+        uint16_t latch;
+        uint8_t control_byte;
+        uint8_t low_byte;
+        bool gate;
+        bool output;
+        bool first_byte;
+        bool latched;
+        State state;
+        uint8_t write_byte;
+        bool have_write_byte;
     };
 
-    Counter _counters[3] = {};
+    Counter counters_[3] = {};
 };
 
 #endif //PIT_H

@@ -9,7 +9,6 @@ struct PicDebugState
     uint8_t lines;
 };
 
-
 class PIC
 {
 public:
@@ -17,8 +16,7 @@ public:
         reset();
     }
 
-    void reset()
-    {
+    void reset() {
         _interruptPending = false;
         _interrupt = 0;
         _irr = 0;
@@ -37,16 +35,14 @@ public:
         _initializationState = initializationStateNone;
     }
 
-    void stubInit()
-    {
+    void stubInit() {
         _icw1 = 0x13;
         _icw2 = 0x08;
         _icw4 = 0x0f;
         _imr = 0xbc;
     }
 
-    void write(const uint32_t address, const uint8_t data)
-    {
+    void write(const uint32_t address, const uint8_t data) {
         if (address == 0) {
             if ((data & 0x10) != 0) {
                 _icw1 = data;
@@ -74,27 +70,27 @@ public:
                 if ((data & 8) == 0) {
                     const uint8_t b = 1 << (data & 7);
                     switch (data & 0xe0) {
-                        case 0x00:  // Rotate in automatic EOI mode (clear) (Automatic Rotation)
+                        case 0x00: // Rotate in automatic EOI mode (clear) (Automatic Rotation)
                             _rotateInAutomaticEOIMode = false;
                             break;
-                        case 0x20:  // Non-specific EOI command (End of Interrupt)
+                        case 0x20: // Non-specific EOI command (End of Interrupt)
                             nonSpecificEOI(false);
                             break;
-                        case 0x40:  // No operation
+                        case 0x40: // No operation
                             break;
-                        case 0x60:  // Specific EOI command (End of Interrupt)
+                        case 0x60: // Specific EOI command (End of Interrupt)
                             _isr &= ~b;
                             break;
-                        case 0x80:  // Rotate in automatic EOI mode (set) (Automatic Rotation)
+                        case 0x80: // Rotate in automatic EOI mode (set) (Automatic Rotation)
                             _rotateInAutomaticEOIMode = true;
                             break;
-                        case 0xa0:  // Rotate on non-specific EOI command (Automatic Rotation)
+                        case 0xa0: // Rotate on non-specific EOI command (Automatic Rotation)
                             nonSpecificEOI(true);
                             break;
-                        case 0xc0:  // Set priority command (Specific Rotation)
+                        case 0xc0: // Set priority command (Specific Rotation)
                             _priority = (data + 1) & 7;
                             break;
-                        case 0xe0:  // Rotate on specific EOI command (Specific Rotation)
+                        case 0xe0: // Rotate on specific EOI command (Specific Rotation)
                             if ((_isr & b) != 0) {
                                 _isr &= ~b;
                                 _priority = (data + 1) & 7;
@@ -138,8 +134,7 @@ public:
         }
     }
 
-    uint8_t read(const uint32_t address)
-    {
+    uint8_t read(const uint32_t address) {
         if ((_ocw3 & 4) != 0) {
             // Poll mode
             acknowledge();
@@ -155,8 +150,7 @@ public:
         return _imr;
     }
 
-    uint8_t interruptAcknowledge()
-    {
+    uint8_t interruptAcknowledge() {
         if (_acknowledgedBytes == 0) {
             acknowledge();
             _acknowledgedBytes = 1;
@@ -174,14 +168,14 @@ public:
             }
             _interruptPending = false;
             if (slaveOn(_interrupt)) {
-                return 0xFF;  // Filled in by slave PIC
+                return 0xFF; // Filled in by slave PIC
             }
             return _interrupt + (_icw2 & 0xF8);
         }
         if (_acknowledgedBytes == 1) {
             _acknowledgedBytes = 2;
             if (slaveOn(_interrupt)) {
-                return 0xff;  // Filled in by slave PIC
+                return 0xff; // Filled in by slave PIC
             }
             if ((_icw1 & 4) != 0) {
                 // Call address interval 4
@@ -195,13 +189,12 @@ public:
         }
         _interruptPending = false;
         if (slaveOn(_interrupt)) {
-            return 0xff;  // Filled in by slave PIC
+            return 0xff; // Filled in by slave PIC
         }
         return _icw2;
     }
 
-    void setIRQLine(const int line, const bool state)
-    {
+    void setIRQLine(const int line, const bool state) {
         const uint8_t b = 1 << line;
         if (state) {
             if (levelTriggered() || (_lines & b) == 0) {
@@ -238,14 +231,17 @@ public:
         };
         return s;
     }
+
 private:
     [[nodiscard]] bool cascadeMode() const { return (_icw1 & 2) == 0; }
     [[nodiscard]] bool levelTriggered() const { return (_icw1 & 8) != 0; }
     [[nodiscard]] bool i86Mode() const { return (_icw4 & 1) != 0; }
     [[nodiscard]] bool autoEOI() const { return (_icw4 & 2) != 0; }
+
     [[nodiscard]] bool slaveOn(const int channel) const {
         return cascadeMode() && (_icw4 & 0xc0) == 0xc0 && (_icw3 & (1 << channel)) != 0;
     }
+
     [[nodiscard]] int findBestInterrupt() {
         int n = _priority;
         for (int i = 0; i < 8; ++i) {
@@ -265,8 +261,8 @@ private:
         }
         return -1;
     }
-    void acknowledge()
-    {
+
+    void acknowledge() {
         const int i = findBestInterrupt();
         if (i == -1) {
             _interrupt = 7;
@@ -278,8 +274,8 @@ private:
             _irr &= ~b;
         }
     }
-    void nonSpecificEOI(bool rotatePriority = false)
-    {
+
+    void nonSpecificEOI(bool rotatePriority = false) {
         int n = _priority;
         for (int i = 0; i < 8; ++i) {
             const uint8_t b = 1 << n;
@@ -293,8 +289,8 @@ private:
             }
         }
     }
-    void checkICW4Needed()
-    {
+
+    void checkICW4Needed() {
         if ((_icw1 & 1) != 0) {
             _initializationState = initializationStateICW4;
         }
@@ -310,6 +306,7 @@ private:
         initializationStateICW3,
         initializationStateICW4
     };
+
     bool _interruptPending;
     int _interrupt;
     uint8_t _irr;

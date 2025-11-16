@@ -841,9 +841,16 @@ private:
         return v;
     }
 
+    uint16_t doSetmo() {
+        _carry = false;
+        _overflow = false;
+        _auxiliary = false;
+        doPZS(0xFFFF);
+        return 0xFFFF;
+    }
+
     uint16_t doALU() {
         uint16_t t;
-        bool oldAF;
         uint32_t a = _registers[_aluInput + 12], v;
         switch (_alu) {
             case 0x00: // ADD
@@ -868,50 +875,70 @@ private:
             case 0x0b: // RRCY
                 return doRotate(((a & wordMask()) >> 1) | topBit(_carry), a, lowBit(a));
             case 0x0c: // SHL
-                return doShift(a << 1, a, topBit(a), (a & 8) != 0);
+                return doShift(a << 1, a, topBit(a), (a & 0x08) != 0);
             case 0x0d: // SHR
-                return doShift((a & wordMask()) >> 1, a, lowBit(a), (a & 0x20) != 0);
+                return doShift((a & wordMask()) >> 1, a, lowBit(a), false);
             case 0x0e: // SETMO
-                return doShift(0xffff, a, false, false);
+                return doSetmo();
             case 0x0f: // SAR
-                return doShift(((a & wordMask()) >> 1) | topBit(topBit(a)), a, lowBit(a), (a & 0x20) != 0);
+                return doShift(((a & wordMask()) >> 1) | topBit(topBit(a)), a, lowBit(a), false);
             case 0x10: // PASS
                 //return doShift(a, a, false, false);
                 return doPass(a);
             case 0x14: // DAA
-                oldAF = _auxiliary;
+            {
+                const bool old_af = _auxiliary;
+                const bool old_cf = _carry;
                 t = a;
-                if (oldAF || (a & 0x0f) > 9) {
-                    t = a + 6;
-                    _overflow = topBit(t & (t ^ a));
+                auto adj = 0;
+
+                // Extremely funky undefined OF behavior (from MartyPC)
+                _overflow = (a <= 0x7f) && ((!old_cf && a >= 0x7A) || (old_cf && a >= 0x1A));
+
+                if (old_af || (a & 0x0f) > 9) {
+                    adj = 6;
+                    t = a + adj;
+                    //_overflow = topBit(t & (t ^ a));
                     _auxiliary = true;
                 }
-                if (_carry || a > (oldAF ? 0x9fU : 0x99U)) {
-                    v = t + 0x60;
-                    _overflow = topBit(v & (v ^ t));
+                if (_carry || a > (old_af ? 0x9fU : 0x99U)) {
+                    adj = 0x60;
+                    v = t + adj;
+                    //_overflow = topBit(v & (v ^ t));
                     _carry = true;
                 }
-                else
+                else {
                     v = t;
+                }
+                //_overflow = (a ^ v) & (adj ^ v) & 0x80 != 0;
                 doPZS(v);
                 break;
+            }
             case 0x15: // DAS
-                oldAF = _auxiliary;
+            {
+                bool old_af = _auxiliary;
                 t = a;
-                if (oldAF || (a & 0x0f) > 9) {
+                auto adj = 0;
+                if (old_af || (a & 0x0f) > 9) {
                     t = a - 6;
-                    _overflow = topBit(a & (t ^ a));
+                    adj = 6;
+                    //_overflow = topBit(a & (t ^ a));
                     _auxiliary = true;
                 }
-                if (_carry || a > (oldAF ? 0x9fU : 0x99U)) {
+                if (_carry || a > (old_af ? 0x9fU : 0x99U)) {
                     v = t - 0x60;
-                    _overflow = topBit(t & (v ^ t));
+                    adj = 0x60;
+                    //_overflow = topBit(t & (v ^ t));
                     _carry = true;
                 }
-                else
+                else {
                     v = t;
+                }
+                // More undefined overflow flag fun!
+                _overflow = ((a ^ adj) & (a ^ v) & 0x80) != 0;
                 doPZS(v);
                 break;
+            }
             case 0x16: // AAA
                 _carry = (_auxiliary || (a & 0xf) > 9);
                 _auxiliary = _carry;
@@ -1002,7 +1029,8 @@ private:
                 rb(_destination & 3) = v;
                 break;
             case 15: // F
-                flags() = (v & 0xfd5) | 2;
+                // Ensure our reserved flags are always set correctly
+                flags() = (v & 0xFFD5) | 0xF002;
                 break;
             case 16: // X (AH)
             case 17: // B (CH)? - not used

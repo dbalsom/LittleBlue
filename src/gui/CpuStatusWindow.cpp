@@ -238,49 +238,49 @@ void CpuStatusWindow::show(bool* open) {
             ImGui::Separator();
             ImGui::Columns(1, nullptr, false);
             switch (_machine->getCpu()->getMCState()) {
-                case Cpu::stateRunning:
+                case Cpu<>::stateRunning:
                     ImGui::Text("Microcode State: Running");
                     break;
-                case Cpu::stateWaitingForQueueData:
+                case Cpu<>::stateWaitingForQueueData:
                     ImGui::Text("Microcode State: Waiting for Queue Data");
                     break;
-                case Cpu::stateWaitingForQueueIdle:
+                case Cpu<>::stateWaitingForQueueIdle:
                     ImGui::Text("Microcode State: Waiting for Queue Idle");
                     break;
-                case Cpu::stateIODelay2:
+                case Cpu<>::stateIODelay2:
                     ImGui::Text("Microcode State: IO Delay 2");
                     break;
-                case Cpu::stateIODelay1:
+                case Cpu<>::stateIODelay1:
                     ImGui::Text("Microcode State: IO Delay 1");
                     break;
-                case Cpu::stateWaitingUntilFirstByteCanStart:
+                case Cpu<>::stateWaitingUntilFirstByteCanStart:
                     ImGui::Text("Microcode State: Waiting Until First Byte Can Start");
                     break;
-                case Cpu::stateWaitingUntilFirstByteDone:
+                case Cpu<>::stateWaitingUntilFirstByteDone:
                     ImGui::Text("Microcode State: Waiting Until First Byte Done");
                     break;
-                case Cpu::stateWaitingUntilSecondByteDone:
+                case Cpu<>::stateWaitingUntilSecondByteDone:
                     ImGui::Text("Microcode State: Waiting Until Second Byte Done");
                     break;
-                case Cpu::stateSingleCycleWait:
+                case Cpu<>::stateSingleCycleWait:
                     ImGui::Text("Microcode State: Single Cycle Wait");
                     break;
-                case Cpu::stateHaltingStart:
+                case Cpu<>::stateHaltingStart:
                     ImGui::Text("Microcode State: Halting Start");
                     break;
-                case Cpu::stateHalting3:
+                case Cpu<>::stateHalting3:
                     ImGui::Text("Microcode State: Halting 3");
                     break;
-                case Cpu::stateHalting2:
+                case Cpu<>::stateHalting2:
                     ImGui::Text("Microcode State: Halting 2");
                     break;
-                case Cpu::stateHalting1:
+                case Cpu<>::stateHalting1:
                     ImGui::Text("Microcode State: Halting 1");
                     break;
-                case Cpu::stateHalted:
+                case Cpu<>::stateHalted:
                     ImGui::Text("Microcode State: Halted");
                     break;
-                case Cpu::stateSuspending:
+                case Cpu<>::stateSuspending:
                     ImGui::Text("Microcode State: Suspending");
                     break;
             }

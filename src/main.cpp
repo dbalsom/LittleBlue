@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <mutex>
 #include <iterator>
+#include <cctype>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -20,6 +21,7 @@
 #include <imgui/backends/imgui_impl_sdl3.h>
 #include <imgui/backends/imgui_impl_sdlrenderer3.h>
 
+#include "CLI11.hpp"
 #include "xtce_blue.h"
 
 #include "gui/imgui_memory_editor.h"
@@ -38,6 +40,7 @@
 #include "core/Machine.h"
 
 #include "frontend/DisplayRenderer.h"
+#include "frontend/TestRunner.h"
 #include "frontend/keyboard.h"
 
 // Forward declare the callback we'll register with SDL_ShowOpenFileDialog
@@ -49,9 +52,20 @@ constexpr uint32_t windowStartHeight = 1024;
 
 bool init_audio(SDL_AudioDeviceID* outAudioDevice, MIX_Mixer** outMixer, SDL_AudioStream** outStream);
 
+struct Config
+{
+    std::string test_path{};
+    size_t test_max{0};
+    // Expect two-digit hex strings like "00".."FF"
+    std::string opcode_start{"00"};
+    std::string opcode_end{"FF"};
+};
+
 // Main application context. Holds SDL objects, Machine instance, and UI state.
 struct AppContext
 {
+    Config config{};
+
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
     SDL_AudioDeviceID audio_device = 0;
@@ -131,7 +145,108 @@ SDL_AppResult SDL_Fail() {
 // SDL Application Initialization callback. We do all our emulator initialization here.
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 
-    // First step is to initialize SDL with the services we need specified in flags. We want to use Video and Audio.
+    auto cfg = Config{};
+
+    // Run CLI11 to parse command-line arguments
+    CLI::App cli_app{std::format("{} v{}", APP_NAME, APP_VERSION)};
+    argv = cli_app.ensure_utf8(argv);
+
+    // Create a subcommand 'run-tests' with options for test path and an optional max
+    auto* run_test = cli_app.add_subcommand("run-tests", "Run SingleStepTests");
+    run_test->add_option("--test-path", cfg.test_path, "Path to location of SingleStepTests")->required(false);
+    run_test->add_option("--test-max", cfg.test_max, "Maximum number of tests to run (0 = no limit)");
+    run_test->add_option("--opcode-start", cfg.opcode_start,
+                         "Starting opcode prefix as two-digit hex (00..FF), matched against filename prefix e.g. '00.MOO.gz'")
+            ->capture_default_str();
+    run_test->add_option("--opcode-end", cfg.opcode_end, "Ending opcode prefix as two-digit hex (00..FF)")->
+              capture_default_str();
+
+    // Parse the arguments (this is an expansion of the CLI11_PARSE macro)
+    try {
+        cli_app.parse(argc, argv);
+    }
+    catch (const CLI::ParseError& e) {
+        cli_app.exit(e);
+        return SDL_APP_FAILURE;
+    }
+
+    // If subcommand was invoked, run tests and exit
+    if (*run_test) {
+        // Parse and validate two-digit hex opcode range strings
+        auto parse_hex_byte = [&](const std::string& s, int& out)-> bool
+        {
+            if (s.size() != 2)
+                return false;
+            if (!std::isxdigit(static_cast<unsigned char>(s[0])) || !std::isxdigit(static_cast<unsigned char>(s[1])))
+                return false;
+            try {
+                out = std::stoi(s, nullptr, 16);
+            }
+            catch (...) { return false; }
+            return out >= 0 && out <= 0xFF;
+        };
+
+        int startVal = 0;
+        int endVal = 0xFF;
+        if (!parse_hex_byte(cfg.opcode_start, startVal)) {
+            std::cerr << "Error: --opcode-start must be a two-digit hex value (00..FF)\n";
+            return SDL_APP_FAILURE;
+        }
+        if (!parse_hex_byte(cfg.opcode_end, endVal)) {
+            std::cerr << "Error: --opcode-end must be a two-digit hex value (00..FF)\n";
+            return SDL_APP_FAILURE;
+        }
+        if (startVal > endVal) {
+            std::cerr << "Error: --opcode-start must be <= --opcode-end\n";
+            return SDL_APP_FAILURE;
+        }
+
+        auto test_runner = new TestRunner();
+        if (!cfg.test_path.empty()) {
+            const std::filesystem::path p(cfg.test_path);
+            if (std::filesystem::is_directory(p)) {
+                for (const auto& entry : std::filesystem::directory_iterator(p)) {
+                    if (!entry.is_regular_file())
+                        continue;
+                    const auto name = entry.path().filename().string();
+                    if (name.size() < 3)
+                        continue;
+                    // Expect filename starting with two hex digits followed by a dot, e.g. "00.MOO.gz"
+                    if (!std::isxdigit(static_cast<unsigned char>(name[0])) || !std::isxdigit(
+                        static_cast<unsigned char>(name[1])) || name[2] != '.')
+                        continue;
+                    int val = 0;
+                    try {
+                        val = std::stoi(name.substr(0, 2), nullptr, 16);
+                    }
+                    catch (...) { continue; }
+                    if (val >= startVal && val <= endVal) {
+                        test_runner->addFiles(entry.path().string());
+                    }
+                }
+            }
+            else if (std::filesystem::is_regular_file(p)) {
+                const auto name = p.filename().string();
+                if (name.size() >= 3 && std::isxdigit(static_cast<unsigned char>(name[0])) && std::isxdigit(
+                    static_cast<unsigned char>(name[1])) && name[2] == '.') {
+                    try {
+                        int val = std::stoi(name.substr(0, 2), nullptr, 16);
+                        if (val >= startVal && val <= endVal)
+                            test_runner->addFiles(p.string());
+                    }
+                    catch (...) {
+                        /* ignore */
+                    }
+                }
+            }
+            test_runner->listFiles();
+        }
+        test_runner->runAllTests(cfg.test_max);
+        return SDL_APP_SUCCESS;
+    }
+
+
+    // Initialize SDL with the services we need specified in flags. We want to use Video and Audio.
     if (not SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         return SDL_Fail();
     }

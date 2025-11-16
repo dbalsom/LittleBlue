@@ -26,7 +26,7 @@ public:
     void run_for(const uint64_t ticks) {
         // The CPU core's run_for takes a number of CPU cycles (ticks/3 -> CPU cycles)
         switch (cpu_.run_for(static_cast<int>(ticks / 3))) {
-            case Cpu::RunResult::BreakpointHit:
+            case Cpu<Bus>::RunResult::BreakpointHit:
                 state_ = MachineState::BreakpointHit;
                 break;
             default:
@@ -77,7 +77,7 @@ public:
     [[nodiscard]] size_t ramSize() { return cpu_.getBus()->ramSize(); }
     // Expose the underlying bus for tools needing direct access (e.g., CGA/VRAM)
     Bus* getBus() { return cpu_.getBus(); }
-    Cpu* getCpu() { return &cpu_; }
+    Cpu<Bus>* getCpu() { return &cpu_; }
     uint8_t getALU() { return cpu_.getALU(); }
     // Read a byte from physical address space (RAM or ROM). Does not modify bus state.
     uint8_t peekPhysical(uint32_t address) { return cpu_.getBus()->peek(address); }
@@ -141,5 +141,5 @@ public:
 private:
     MachineState state_{MachineState::Stopped};
     uint64_t last_pit_ticks_ = 0;
-    Cpu cpu_{};
+    Cpu<Bus> cpu_{};
 };

@@ -15,6 +15,7 @@
 #include "microcode.h"
 
 #define LINE_ENDING_SIZE 1
+#define DEBUG_MC 0
 
 enum class Register : size_t
 {
@@ -56,9 +57,10 @@ constexpr size_t reg_to_idx(Register r) {
     return static_cast<size_t>(r);
 }
 
+template <typename BusType = Bus>
 class Cpu
 {
-    enum
+    enum GroupDecodeFlags
     {
         groupMemory = 1,
         groupInitialEARead = 2,
@@ -109,23 +111,232 @@ public:
         stateSuspending,
     };
 
+    // Default constructor: default-construct the bus and initialize CPU state
     Cpu() :
         _consoleLogging(false), _bus() {
-        _logStartCycle = 0;
-        _logEndCycle = 100;
+        initializeCommon();
+    }
 
+    // Forwarding constructor: allow callers to construct CpuT with arguments forwarded to BusType's constructor.
+    template <typename... Args>
+    explicit Cpu(Args&&... args) :
+        _consoleLogging(false), _bus(std::forward<Args>(args)...) {
+        initializeCommon();
+    }
+
+    MicrocodeState getMCState() const { return _state; }
+    BusType* getBus() { return &_bus; }
+    uint8_t getALU() const { return _alu; }
+    uint8_t* getRAM() { return _bus.ram(); }
+    uint16_t* getMainRegisters() { return &_registers[24]; }
+    uint16_t* getRegisters() { return &_registers[0]; }
+    void stubInit() { _bus.stubInit(); }
+
+    void setExtents(int logStartCycle, int logEndCycle, int executeEndCycle, int stopIP, int stopSeg) {
+        _logStartCycle = logStartCycle + 4;
+        _logEndCycle = logEndCycle;
+        _executeEndCycle = executeEndCycle;
+        _stopIP = stopIP;
+        _stopSeg = stopSeg;
+    }
+
+    void setInitialIP(int v) { ip() = v; }
+    [[nodiscard]] uint64_t cycle() const { return _cycle >= 11 ? _cycle - 11 : 0; }
+
+    [[nodiscard]] std::string log() const {
+        // Assemble buffered lines into a single string on request
+        std::string out;
+        for (const auto& s : _logBuffer) {
+            out += s;
+        }
+        return out;
+    }
+
+    void reset() {
+        //_bus.reset();
+        for (unsigned short& _register : _registers) {
+            _register = 0;
+        }
+        setBytePointers();
+        _inst_boundary = false;
+        _restore_flags = false;
+        _registers[1] = 0xFFFF; // RC (CS)
+        _registers[21] = 0xFFFF; // ONES
+        _registers[15] = 2; // FLAGS
+
+        _cycle = 0;
+        _microcodePointer = 0x1800;
+        _busState = tIdle;
+        _ioType = ioPassive;
+        _snifferDecoder.reset();
+        _prefetching = true;
+        _logBuffer.clear();
+        ip() = 0;
+        _nmiRequested = false;
+        _alu = 0;
+        _aluInput = 0;
+        _queueBytes = 0;
+        _queue = 0;
+        _segmentOverride = -1;
+        _f1 = false;
+        _repne = false;
+        _lock = false;
+        _loaderState = 0;
+        _lastMicrocodePointer = -1;
+        _dequeueing = false;
+        _ioCancelling = 0;
+        _ioRequested = false;
+        _t4 = false;
+        _prefetchDelayed = false;
+        _queueFlushing = false;
+        _lastIOType = ioPassive;
+        _t5 = false;
+        _interruptPending = false;
+        _ready = true;
+        //_cyclesUntilCanLowerQueueFilled = 0;
+        _locking = false;
+        _breakpointHit = false;
+
+        // Reset flags
+        _carry = false;
+        _zero = false;
+        _superZero = false;
+        _auxiliary = false;
+        _sign = false;
+        _parity = false;
+        _overflow = false;
+    }
+
+    RunResult run_for(const int cycleCt) {
+
+        _inst_boundary = false;
+        sanity_check();
+        // Clear the breakpoint status if we're being asked to run again
+        _breakpointHit = false;
+
+        for (int i = 0; i < cycleCt; i++) {
+            simulateCycle();
+
+            // If we've reached an instruction boundary this cycle, check the breakpoint
+            if (_inst_boundary) {
+                _inst_boundary = false;
+                if (_hasBreakpoint) {
+                    uint16_t realIP = getRealIP();
+                    if (cs() == _breakpoint_cs && realIP == _breakpoint_ip) {
+                        _breakpointHit = true;
+                        return RunResult::BreakpointHit;
+                    }
+                }
+            }
+
+            if (_breakpointHit) {
+                // Stop executing further cycles if a breakpoint was hit by other means
+                return RunResult::BreakpointHit;
+            }
+        }
+
+        return RunResult::Ok;
+    }
+
+    void run() {
+        do {
+            simulateCycle();
+        }
+        while ((getRealIP() != _stopIP + 2 || cs() != _stopSeg) && _cycle < _executeEndCycle);
+    }
+
+    void setConsoleLogging() {
+        _consoleLogging = true;
+    }
+
+    // Run CPU cycles until the next instruction boundary is reached.
+    // Returns the number of CPU cycles executed.
+    int stepToNextInstruction() {
+        _inst_boundary = false;
+        int cycles = 0;
+        // if _rni is true, clear it first by cycling the CPU until it becomes false.
+        while (_rni && _state != stateHalted) {
+            simulateCycle();
+        }
+        //_rni = false;
+        // Run cycles until _rni becomes true or the CPU halts.
+        while (!_inst_boundary && _state != stateHalted) {
+            simulateCycle();
+            ++cycles;
+            // Prevent infinite loop in funky situations by limiting cycles
+            if (cycles > 1000000) {
+                break;
+            }
+        }
+        return cycles;
+    }
+
+    void setRegister(const Register r, const uint16_t v) {
+        _registers[reg_to_idx(r)] = v;
+    }
+
+    uint16_t getRegister(const Register r) const {
+        return _registers[reg_to_idx(r)];
+    }
+
+    // Backwards-compatible wrapper: some code calls getRealIP()
+    uint16_t getRealIP() { return ip() - _queueBytes; }
+
+    // Breakpoint API
+    void setBreakpoint(uint16_t cs, uint16_t ip) {
+        _breakpoint_cs = cs;
+        _breakpoint_ip = ip;
+        _hasBreakpoint = true;
+        _breakpointHit = false;
+    }
+
+    void clearBreakpoint() {
+        _hasBreakpoint = false;
+        _breakpointHit = false;
+    }
+
+    bool hasBreakpoint() const { return _hasBreakpoint; }
+    bool breakpointHit() const { return _breakpointHit; }
+    uint16_t breakpointCS() const { return _breakpoint_cs; }
+    uint16_t breakpointIP() const { return _breakpoint_ip; }
+    void clearBreakpointHit() { _breakpointHit = false; }
+
+private:
+    enum IOType
+    {
+        ioInterruptAcknowledge = 0,
+        ioReadPort = 1,
+        ioWritePort = 2,
+        ioHalt = 3,
+        ioPrefetch = 4,
+        ioReadMemory = 5,
+        ioWriteMemory = 6,
+        ioPassive = 7
+    };
+
+    void setBytePointers() {
         // Initialize _byteRegisters as byte pointers into _registers.
         // Endianness is checked by setting a known value and examining the first byte.
         // This is clever, but it makes Cpu not object-safe for assignment/relocation.
         _registers[24] = 0x100;
-        auto byteData = reinterpret_cast<uint8_t*>(&_registers[24]);
-        int bigEndian = *byteData;
+        const auto byteData = reinterpret_cast<uint8_t*>(&_registers[24]);
+        const int bigEndian = *byteData;
         for (int i = 0; i < 8; ++i) {
-            int byteNumbers[8] = {0, 2, 4, 6, 1, 3, 5, 7};
+            const int byteNumbers[8] = {0, 2, 4, 6, 1, 3, 5, 7};
             // The index will be XOR'd with either 0 (little-endian) or 1 (big-endian) to flip the byte order
             // if required.
             _byteRegisters[i] = &byteData[byteNumbers[i] ^ bigEndian];
         }
+
+    }
+
+    // Extracted common initialization logic so we can reuse it in all constructors.
+    void initializeCommon() {
+        _logStartCycle = 0;
+        _logEndCycle = 100;
+
+        setBytePointers();
+
         _registers[21] = 0xffff;
         _registers[23] = 0;
 
@@ -151,12 +362,13 @@ public:
             // Iterate through left and right halves of each block.
             for (int half = 0; half < 2; ++half) {
                 std::string filename = (half == 1 ? "l" : "r") + decimal(y) + (use8086 ? "a" : "") + ".txt";
-
+#if DEBUG_MC
                 std::cout << filename << std::endl;
+#endif
                 std::string_view s = get_file(filename);
-
+#if DEBUG_MC
                 std::cout << s;
-
+#endif
                 // Iterate through height of block (24 or 12 rows).
                 for (int yy = 0; yy < h; ++yy) {
                     // Instruction base row index (24 rows per block).
@@ -172,8 +384,9 @@ public:
 
         for (int i = 0; i < 512; ++i) {
             int d = instructions[i];
+#if DEBUG_MC
             std::cout << std::format("{:03X}: {:021b}\n", i, static_cast<unsigned int>(d));
-
+#endif
             int s = ((d >> 13) & 1) + ((d >> 10) & 6) + ((d >> 11) & 0x18);
             int dd = ((d >> 20) & 1) + ((d >> 18) & 2) + ((d >> 16) & 4) + ((d >> 14) & 8) + ((d >> 12) & 0x10);
             int typ = (d >> 7) & 7;
@@ -185,9 +398,9 @@ public:
             _microcode[i * 4 + 2] = (f << 3) + typ;
             _microcode[i * 4 + 3] = d & 0xff;
         }
-
+#if DEBUG_MC
         std::cout << "Instruction words loaded." << std::endl;
-
+#endif
         // Read in the stage1 decoder PLA ROM logic.
         int stage1[128];
         for (int x = 0; x < 128; ++x) {
@@ -207,7 +420,9 @@ public:
             // Iterate through top and bottom halves of each ROM file.
             for (int h = 0; h < 2; ++h) {
                 std::string filename = decimal(g) + (h == 0 ? "t" : "b") + ".txt";
+#if DEBUG_MC
                 std::cout << "Loading microcode file: " << filename << std::endl;
+#endif
                 std::string_view s = get_file(filename);
 
                 // Iterate through the height of each ROM file (11 rows).
@@ -252,8 +467,9 @@ public:
         }
 
         std::string translationFile = use8086 ? "translation_8086.txt" : "translation_8088.txt";
+#if DEBUG_MC
         std::cout << "Loading translation ROM: " << translationFile << std::endl;
-
+#endif
         std::string_view translationString = get_file(translationFile);
         int tsp = 0;
         char c = translationString[0];
@@ -302,7 +518,9 @@ public:
 
             for (int j = 0; j < 256; ++j) {
                 if ((j & mask) == bits) {
+#if DEBUG_MC
                     std::cout << "Translation output: " << std::format("{:02X}: {:014b}\n", j, output);
+#endif
                     _translation[j] = output;
                 }
             }
@@ -382,178 +600,15 @@ public:
             }
         }
 
+#if DEBUG_MC
         for (int i = 0; i < 256; i++) {
             std::cout << std::format("{:02X}:{:08X}\n", i, _groups[i]);
         }
+#endif
 
         _microcodePointer = 0;
         _microcodeReturn = 0;
     }
-
-    MicrocodeState getMCState() const { return _state; }
-    Bus* getBus() { return &_bus; }
-    uint8_t getALU() const { return _alu; }
-    uint8_t* getRAM() { return _bus.ram(); }
-    uint16_t* getMainRegisters() { return &_registers[24]; }
-    uint16_t* getRegisters() { return &_registers[0]; }
-    void stubInit() { _bus.stubInit(); }
-
-    void setExtents(int logStartCycle, int logEndCycle, int executeEndCycle, int stopIP, int stopSeg) {
-        _logStartCycle = logStartCycle + 4;
-        _logEndCycle = logEndCycle;
-        _executeEndCycle = executeEndCycle;
-        _stopIP = stopIP;
-        _stopSeg = stopSeg;
-    }
-
-    void setInitialIP(int v) { ip() = v; }
-    [[nodiscard]] uint64_t cycle() const { return _cycle >= 11 ? _cycle - 11 : 0; }
-
-    [[nodiscard]] std::string log() const {
-        // Assemble buffered lines into a single string on request
-        std::string out;
-        for (const auto& s : _logBuffer) {
-            out += s;
-        }
-        return out;
-    }
-
-    void reset() {
-        //_bus.reset();
-
-        for (unsigned short& _register : _registers) {
-            _register = 0;
-        }
-        _registers[1] = 0xFFFF; // RC (CS)
-        _registers[21] = 0xFFFF; // ONES
-        _registers[15] = 2; // FLAGS
-
-        _cycle = 0;
-        _microcodePointer = 0x1800;
-        _busState = tIdle;
-        _ioType = ioPassive;
-        _snifferDecoder.reset();
-        _prefetching = true;
-        _logBuffer.clear();
-        ip() = 0;
-        _nmiRequested = false;
-        _alu = 0;
-        _aluInput = 0;
-        _queueBytes = 0;
-        _queue = 0;
-        _segmentOverride = -1;
-        _f1 = false;
-        _repne = false;
-        _lock = false;
-        _loaderState = 0;
-        _lastMicrocodePointer = -1;
-        _dequeueing = false;
-        _ioCancelling = 0;
-        _ioRequested = false;
-        _t4 = false;
-        _prefetchDelayed = false;
-        _queueFlushing = false;
-        _lastIOType = ioPassive;
-        _t5 = false;
-        _interruptPending = false;
-        _ready = true;
-        //_cyclesUntilCanLowerQueueFilled = 0;
-        _locking = false;
-        _breakpointHit = false;
-    }
-
-    RunResult run_for(const int cycleCt) {
-
-        sanity_check();
-        // Clear the breakpoint status if we're being asked to run again
-        _breakpointHit = false;
-
-        for (int i = 0; i < cycleCt; i++) {
-            simulateCycle();
-
-            // If we've reached an instruction boundary this cycle, check the breakpoint
-            if (_rni && _hasBreakpoint) {
-                uint16_t realIP = getRealIP();
-                if (cs() == _breakpoint_cs && realIP == _breakpoint_ip) {
-                    _breakpointHit = true;
-                    return RunResult::BreakpointHit;
-                }
-            }
-
-            if (_breakpointHit) {
-                // Stop executing further cycles if a breakpoint was hit by other means
-                return RunResult::BreakpointHit;
-            }
-        }
-
-        return RunResult::Ok;
-    }
-
-    void run() {
-        do {
-            simulateCycle();
-        }
-        while ((getRealIP() != _stopIP + 2 || cs() != _stopSeg) && _cycle < _executeEndCycle);
-    }
-
-    void setConsoleLogging() {
-        _consoleLogging = true;
-    }
-
-    // Run CPU cycles until the next instruction boundary is reached.
-    // Returns the number of CPU cycles executed.
-    int stepToNextInstruction() {
-        int cycles = 0;
-        // if _rni is true, clear it first by cycling the CPU until it becomes false.
-        while (_rni && _state != stateHalted) {
-            simulateCycle();
-        }
-        //_rni = false;
-        // Run cycles until _rni becomes true or the CPU halts.
-        while (!_rni && _state != stateHalted) {
-            simulateCycle();
-            ++cycles;
-            // Prevent infinite loop in funky situations by limiting cycles
-            if (cycles > 1000000)
-                break;
-        }
-        return cycles;
-    }
-
-    // Backwards-compatible wrapper: some code calls getRealIP()
-    uint16_t getRealIP() { return ip() - _queueBytes; }
-
-    // Breakpoint API
-    void setBreakpoint(uint16_t cs, uint16_t ip) {
-        _breakpoint_cs = cs;
-        _breakpoint_ip = ip;
-        _hasBreakpoint = true;
-        _breakpointHit = false;
-    }
-
-    void clearBreakpoint() {
-        _hasBreakpoint = false;
-        _breakpointHit = false;
-    }
-
-    bool hasBreakpoint() const { return _hasBreakpoint; }
-    bool breakpointHit() const { return _breakpointHit; }
-    uint16_t breakpointCS() const { return _breakpoint_cs; }
-    uint16_t breakpointIP() const { return _breakpoint_ip; }
-    void clearBreakpointHit() { _breakpointHit = false; }
-
-private:
-    enum IOType
-    {
-        ioInterruptAcknowledge = 0,
-        ioReadPort = 1,
-        ioWritePort = 2,
-        ioHalt = 3,
-        ioPrefetch = 4,
-        ioReadMemory = 5,
-        ioWriteMemory = 6,
-        ioPassive = 7
-    };
 
     void sanity_check() {
         if (_byteRegisters[0] != reinterpret_cast<uint8_t*>(&_registers[24])) {
@@ -667,6 +722,15 @@ private:
         _group = _nextGroup;
     }
 
+    void readFlags() {
+        _carry = cf(); // Just for SALC
+        _overflow = of(); // Not sure if the other flags work the same
+        _parity = pf() ? 0x04 : 0;
+        _sign = sf();
+        _zero = zf();
+        _auxiliary = af();
+    }
+
     void startMicrocodeInstruction() {
         _loaderState = 2;
         startInstruction();
@@ -678,12 +742,7 @@ private:
         if ((_group & groupByteOrWordAccess) == 0) {
             _wordSize = false; // Just for XLAT
         }
-        _carry = cf(); // Just for SALC
-        _overflow = of(); // Not sure if the other flags work the same
-        _parity = pf() ? 0x40 : 0;
-        _sign = sf();
-        _zero = zf();
-        _auxiliary = af();
+        readFlags();
         // Default is ADD tmpa (12) (assumed in EA calculations)
         _alu = 0;
         _aluInput = 0;
@@ -694,6 +753,8 @@ private:
         _state = stateRunning;
 
         if ((_group & groupEffectiveAddress) != 0) {
+            // This opcode has a ModR/M.
+
             // EALOAD and EADONE finish with RTN
             _modRM = _nextModRM;
             if ((_group & groupMicrocodePointerFromOpcode) == 0) {
@@ -701,12 +762,17 @@ private:
                     ((_opcode & 1) << 12) | ((_opcode & 8) << 4);
                 _state = stateSingleCycleWait;
             }
+            // Check that RM != 11 which would indicate a register-only operation
             _useMemory = ((_modRM & 0xc0) != 0xc0);
             if (_useMemory) {
+                // We have a memory operand - resolve the correct microcode address for EA calculation.
                 int t = _translation[2 + ((_modRM & 7) << 3) + (_modRM & 0xc0)];
+                // This logic selects either DS or SS based on the addressing mode.
                 _segment = (lowBit(t) ? 2 : 3);
+                // Save the return address and jump to EA calculation microcode. This takes one cycle.
                 _microcodeReturn = _microcodePointer;
                 _microcodePointer = t >> 1;
+                _restore_flags = true;
                 _state = stateSingleCycleWait;
             }
         }
@@ -999,8 +1065,10 @@ private:
 
     void busAccessDone(uint8_t high) {
         opr() |= high << 8;
-        if ((_operands & 0x10) != 0)
+        if ((_operands & 0x10) != 0) {
             _rni = true;
+            _inst_boundary = true;
+        }
         switch (_operands & 3) {
             case 0: // Increment IND by 2
                 ind() += 2;
@@ -1018,12 +1086,15 @@ private:
     void doSecondMisc() {
         switch (_operands & 7) {
             case 0: // RNI
-                if (!_skipRNI)
+                if (!_skipRNI) {
                     _rni = true;
+                    _inst_boundary = true;
+                }
                 break;
             case 1: // WB,NX
-                if (!_mIsM || !_useMemory || _alu == 7)
+                if (!_mIsM || !_useMemory || _alu == 7) {
                     _nx = true;
+                }
                 break;
             case 2: // CORR
                 _state = stateWaitingForQueueIdle;
@@ -1037,6 +1108,10 @@ private:
                 _ioType = ioPassive;
                 break;
             case 4: // RTN
+                // If we are returning from an EA calculation, restore flags.
+                if (_restore_flags) {
+                    readFlags();
+                }
                 _microcodePointer = _microcodeReturn;
                 _state = stateSingleCycleWait;
                 break;
@@ -1048,10 +1123,12 @@ private:
 
     void startIO() {
         _state = stateIODelay1;
-        if ((_busState == t3 || _busState == tWait) || canStartPrefetch())
+        if ((_busState == t3 || _busState == tWait) || canStartPrefetch()) {
             _state = stateIODelay2;
-        if (_busState == t4 || _busState == tIdle)
+        }
+        if (_busState == t4 || _busState == tIdle) {
             _ioType = ioPassive;
+        }
         _ioRequested = true;
     }
 
@@ -1118,10 +1195,12 @@ private:
                 break;
             case 5: // long jump or call
             case 7:
-                if (!condition(_operands >> 4))
+                if (!condition(_operands >> 4)) {
                     break;
-                if (_type == 7)
+                }
+                if (_type == 7) {
                     _microcodeReturn = _microcodePointer;
+                }
                 _microcodePointer = _translation[
                     ((_type & 2) << 6) +
                     ((_operands << 3) & 0x78) +
@@ -1159,88 +1238,122 @@ private:
                 m = &_microcode[
                     ((_microcodeIndex[_microcodePointer >> 2] << 2) +
                         (_microcodePointer & 3)) << 2];
-                _microcodePointer = (_microcodePointer & 0xfff0) |
-                    ((_microcodePointer + 1) & 0xf);
+                _microcodePointer =
+                    (_microcodePointer & 0xfff0)
+                    | ((_microcodePointer + 1) & 0xf);
                 _destination = m[0];
                 _source = m[1];
                 _type = m[2] & 7;
                 _updateFlags = ((m[2] & 8) != 0);
                 _operands = m[3];
                 v = readSource();
-                if (_state == stateWaitingForQueueData)
+                if (_state == stateWaitingForQueueData) {
+                    // Empty queue prevents further execution.
                     break;
+                }
                 writeDestination(v);
                 doSecondHalf();
                 break;
+
             case stateWaitingForQueueData:
-                if (_queueBytes == 0)
+                if (_queueBytes == 0) {
+                    // Still no data. Try again next cycle.
                     break;
+                }
+                // We have a byte in the queue, so resume running.
                 _state = stateRunning;
                 writeDestination(readSource());
                 doSecondHalf();
                 break;
 
             case stateSuspending:
-                if (_busState != t4)
+                if (_busState != t4) {
+                    // Wait until any pending bus cycle is complete.
                     break;
+                }
                 _state = stateRunning;
                 break;
 
             case stateWaitingForQueueIdle:
-                if (_ioType != ioPassive || _busState == t4 || _t4)
+                if (_ioType != ioPassive || _busState == t4 || _t4) {
                     break;
+                }
                 ip() -= _queueBytes;
                 _queueBytes = 0; // so that realIP() is correct
                 _state = stateRunning;
                 break;
 
             case stateIODelay2:
-                if (!_ready && (_busState == t3 || _busState == tWait))
+                if (!_ready && (_busState == t3 || _busState == tWait)) {
                     break;
+                }
                 _state = stateIODelay1;
                 break;
+
             case stateIODelay1:
-                if (_busState == t4)
+                if (_busState == t4) {
                     break;
+                }
                 _state = stateWaitingUntilFirstByteCanStart;
                 break;
+
             case stateWaitingUntilFirstByteCanStart:
-                if (_ioType != ioPassive)
+                if (_ioType != ioPassive) {
+                    // Bus is busy
                     break;
+                }
                 _ioWriteData = opr() & 0xff;
                 _ioSegment = (_operands >> 2) & 3;
-                if (_ioSegment == 3)
+                if (_ioSegment == 3) {
+                    // Use the segment override if present
                     _ioSegment = _segmentOverride != -1 ? _segmentOverride : _segment;
+                }
                 else {
-                    // 9 because it's a register slot that stays as all-zero
-                    // bits, and has the same low two bits (so that the logs
-                    // show the right segment).
-                    if (_ioSegment == 1)
+                    // This is a no-segment access (IVT read or I/O).
+                    // We use register slot 9 because it's a register slot that stays as all-zero bits, and has the
+                    // same low two bits (so that the logs show the right segment).
+                    if (_ioSegment == 1) {
                         _ioSegment = 9;
+                    }
                 }
                 _ioAddress = physicalAddress(_ioSegment, ind());
                 _state = stateWaitingUntilFirstByteDone;
                 busStart();
                 break;
+
             case stateWaitingUntilFirstByteDone:
-                if (!_wordSize)
+                if (!_wordSize) {
+                    // 8-bit access, disable BIU request flag as we will complete this bus cycle.
                     _ioRequested = false;
-                if (_ioType != ioPassive)
+                }
+                if (_ioType != ioPassive) {
+                    // Bus is busy
                     break;
+                }
+                // Perform read or write
                 _ioWriteData = opr() >> 8;
                 opr() = _ioReadData;
-                if (!_wordSize)
-                    busAccessDone(0xff);
+
+                if (!_wordSize) {
+                    // 8-bit access - all done this state.
+                    // When reading from the bus, the high byte is set to 0xFF on byte access.
+                    busAccessDone(0xFF);
+                }
                 else {
+                    // 16-bit access - increment the address, start the second byte.
                     _ioAddress = physicalAddress(_ioSegment, ind() + 1);
                     _state = stateWaitingUntilSecondByteDone;
                     busStart();
                 }
                 break;
+
             case stateWaitingUntilSecondByteDone:
+                // Second half of a word-size transfer.
                 _ioRequested = false;
-                if (_ioType != ioPassive)
+                if (_ioType != ioPassive) {
+                    // Bus is busy
                     break;
+                }
                 busAccessDone(_ioReadData);
                 break;
 
@@ -1255,39 +1368,49 @@ private:
                     break;
                 _state = stateHalting2;
                 break;
+
             case stateHalting3:
                 if (_ioType != ioPassive)
                     break;
                 _state = stateHalting2;
                 break;
+
             case stateHalting2:
                 _snifferDecoder.setStatus((int)ioHalt);
                 _state = stateHalting1;
                 break;
+
             case stateHalting1:
                 _state = stateHalted;
                 break;
+
             case stateHalted:
+                // The CPU is halted!
                 _snifferDecoder.setStatus((int)ioPassive);
-                if (!interruptPending())
+                // Stay halted until an interrupt occurs
+                if (!interruptPending()) {
                     break;
+                }
+                // Try to account for a mysterious extra halt cycle
                 if (_extraHaltDelay) {
                     _extraHaltDelay = false;
                     break;
                 }
+                // Waking up now - read the next instruction
                 _rni = true;
+                _inst_boundary = true;
                 _state = stateRunning;
                 break;
         }
     }
 
-    void setNextMicrocode(int nextState, int nextMicrocode) {
+    void setNextMicrocode(const int nextState, const int nextMicrocode) {
         _nextMicrocodePointer = nextMicrocode;
         _loaderState = nextState | 1;
         _nextGroup = _groups[nextMicrocode >> 4];
     }
 
-    void readOpcode(int nextState) {
+    void readOpcode(const int nextState) {
         if ((flags() & 0x100) != 0) {
             setNextMicrocode(nextState, 0x1000);
             return;
@@ -1492,7 +1615,7 @@ private:
             _snifferDecoder.setDMAS(_bus.getDMAS());
             _snifferDecoder.setIRQs(_bus.getIRQLines());
             _snifferDecoder.setINT(_bus.interruptPending());
-            _snifferDecoder.setCGA(_bus.getCGA());
+            //_snifferDecoder.setCGA(_bus.getCGA());
 
             std::string l = _bus.snifferExtra() + _snifferDecoder.getLine();
             l = pad(l, 103) + microcodeString();
@@ -1982,21 +2105,21 @@ private:
         _sign = topBit(v);
     }
 
-    void doFlags(uint32_t result, bool of, bool af) {
+    void doFlags(const uint32_t result, const bool of, const bool af) {
         doPZS(result);
         _overflow = of;
         _auxiliary = af;
     }
 
-    uint16_t bitwise(uint16_t data) {
+    uint16_t bitwise(const uint16_t data) {
         doFlags(data, false, false);
         _carry = false;
         return data;
     }
 
-    void doAddSubFlags(uint32_t result, uint32_t x, bool of, bool af) {
+    void doAddSubFlags(const uint32_t result, const uint32_t x, const bool of, const bool af) {
         doFlags(result, of, af);
-        _carry = (((result ^ x) & (_wordSize ? 0x10000 : 0x100)) != 0);
+        _carry = ((result ^ x) & (_wordSize ? 0x10000 : 0x100)) != 0;
     }
 
     bool lowBit(uint32_t v) { return (v & 1) != 0; }
@@ -2004,14 +2127,14 @@ private:
     bool topBit(uint32_t w) { return (w & (_wordSize ? 0x8000 : 0x80)) != 0; }
     uint16_t topBit(bool v) { return v ? (_wordSize ? 0x8000 : 0x80) : 0; }
 
-    uint16_t add(uint32_t a, uint32_t b, bool c) {
-        uint32_t r = a + b + (c ? 1 : 0);
+    uint16_t add(const uint32_t a, const uint32_t b, const bool c) {
+        const uint32_t r = a + b + (c ? 1 : 0);
         doAddSubFlags(r, a ^ b, topBit((r ^ a) & (r ^ b)), ((a ^ b ^ r) & 0x10) != 0);
         return r;
     }
 
-    uint16_t sub(uint32_t a, uint32_t b, bool c) {
-        uint32_t r = a - (b + (c ? 1 : 0));
+    uint16_t sub(const uint32_t a, const uint32_t b, const bool c) {
+        const uint32_t r = a - (b + (c ? 1 : 0));
         doAddSubFlags(r, a ^ b, topBit((a ^ b) & (r ^ a)), ((a ^ b ^ r) & 0x10) != 0);
         return r;
     }
@@ -2026,7 +2149,7 @@ private:
     std::deque<std::string> _logBuffer;
     size_t _logCapacity = 10000; // default capacity (lines)
     bool _cycleLogging = false; // enabled via GUI
-    Bus _bus;
+    BusType _bus;
 
 public:
     // Cycle log API
@@ -2109,23 +2232,25 @@ private:
     bool _lock;
     uint8_t _opcode;
     uint8_t _modRM;
-    bool _carry;
-    bool _zero;
-    bool _superZero;
-    bool _auxiliary;
-    bool _sign;
-    uint8_t _parity;
-    bool _overflow;
+    bool _carry{false};
+    bool _zero{false};
+    bool _superZero{false};
+    bool _auxiliary{false};
+    bool _sign{false};
+    uint8_t _parity{0};
+    bool _overflow{false};
     int _aluInput;
     uint8_t _nextModRM;
     int _loaderState;
-    bool _rni;
-    bool _nx;
+    bool _rni{false}; // Microcode signal to read next instruction
+    bool _inst_boundary{false};
+    bool _restore_flags{false};
+    bool _nx{false}; // Microcode signal to read next instruction early (1-cycle pipeline)
     MicrocodeState _state;
     int _source;
     int _destination;
     int _type;
-    bool _updateFlags;
+    bool _updateFlags{false};
     uint8_t _operands;
     bool _mIsM;
     bool _skipRNI;

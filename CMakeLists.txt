@@ -29,7 +29,9 @@ add_executable(${EXECUTABLE_NAME})
 target_include_directories(${EXECUTABLE_NAME}
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src/core
-        ${CMAKE_SOURCE_DIR}/src/third_party/blip_buffer)
+        ${CMAKE_SOURCE_DIR}/src/moo
+        ${CMAKE_SOURCE_DIR}/src/third_party/blip_buffer
+        ${CMAKE_SOURCE_DIR}/src/third_party/CLI11)
 
 # Add your sources to the target
 target_sources(${EXECUTABLE_NAME} 
@@ -70,6 +72,7 @@ target_sources(${EXECUTABLE_NAME}
         src/gui/DmacStatusWindow.cpp
         src/gui/DisplayDebugWindow.cpp
         src/third_party/blip_buffer/blip_buffer.cpp
+        src/frontend/TestRunner.cpp
 )
 
 # Set C++ version
@@ -80,10 +83,24 @@ if(EMSCRIPTEN)
 	set(CMAKE_EXECUTABLE_SUFFIX ".html" CACHE INTERNAL "")
 endif()
 
+# Helper to silence dev warnings inside a subdirectory's CMakeLists.txt
+macro(add_subdirectory_quiet dir)
+    # Backup current setting
+    set(_no_dev_backup "$CACHE{CMAKE_SUPPRESS_DEVELOPER_WARNINGS}")
+    # Turn off dev warnings
+    set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON CACHE INTERNAL "" FORCE)
+    # Please for the love of God just shut up about CMake deprecations
+    set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
+    # Add the subdirectory as usual
+    add_subdirectory(${dir} ${ARGN})
+    # Restore previous setting
+    set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ${_no_dev_backup} CACHE INTERNAL "" FORCE)
+endmacro()
+
 # Configure SDL by calling its CMake file.
 # we use EXCLUDE_FROM_ALL so that its install targets and configs don't
 # pollute upwards into our configuration.
-add_subdirectory(SDL EXCLUDE_FROM_ALL)
+add_subdirectory_quiet(SDL EXCLUDE_FROM_ALL)
 
 # Add ImGui
 add_library(imgui
@@ -108,7 +125,7 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
 # If you don't want SDL_ttf, then remove this section.
 set(SDLTTF_VENDORED ON) # tell SDL_ttf to build its own dependencies
-add_subdirectory(SDL_ttf EXCLUDE_FROM_ALL)	
+add_subdirectory_quiet(SDL_ttf EXCLUDE_FROM_ALL)
 
 # SDL_mixer (used for playing audio)
 set(SDLMIXER_MIDI_NATIVE OFF)     # disable formats we don't use to make the build faster and smaller. Also some of these don't work on all platforms so you'll need to do some experimentation.
@@ -117,7 +134,7 @@ set(SDLMIXER_WAVPACK OFF)
 set(SDLMIXER_MOD OFF)
 set(SDLMIXER_OPUS OFF)
 set(SDLMIXER_VENDORED ON)   # tell SDL_mixer to build its own dependencies
-add_subdirectory(SDL_mixer EXCLUDE_FROM_ALL)
+add_subdirectory_quiet(SDL_mixer EXCLUDE_FROM_ALL)
 
 # SDL_image (used for loading various image formats)
 set(SDLIMAGE_VENDORED ON)
@@ -125,16 +142,33 @@ set(SDLIMAGE_AVIF OFF)	# disable formats we don't use to make the build faster a
 set(SDLIMAGE_BMP OFF)
 set(SDLIMAGE_JPEG OFF)
 set(SDLIMAGE_WEBP OFF)
-add_subdirectory(SDL_image EXCLUDE_FROM_ALL)
+set(SDLIMAGE_TIF OFF)
+add_subdirectory_quiet(SDL_image EXCLUDE_FROM_ALL)
 
-# Link SDL to our executable. This also makes its include directory available to us. 
+# Bring in zlib from the SDL_image tree
+add_subdirectory_quiet(SDL_image/external/zlib EXCLUDE_FROM_ALL)
+
+# Create a canonical ZLIB::ZLIB alias from whatever target zlib’s CMake defines
+if (TARGET zlibstatic)
+    add_library(ZLIB::ZLIB ALIAS zlibstatic)
+elseif (TARGET zlib)
+    add_library(ZLIB::ZLIB ALIAS zlib)
+else()
+    message(FATAL_ERROR "Could not find zlib or zlibstatic target in SDL_image/external/zlib")
+endif()
+
+target_compile_definitions(${EXECUTABLE_NAME} PRIVATE MOO_USE_ZLIB)
+
+# Link SDL to our executable. This also makes its include directory available to us.
 target_link_libraries(${EXECUTABLE_NAME} PUBLIC
-        imgui
+    imgui
 	SDL3_ttf::SDL3_ttf      # remove if you are not using SDL_ttf
 	SDL3_mixer::SDL3_mixer  # remove if you are not using SDL_mixer
 	SDL3_image::SDL3_image	# remove if you are not using SDL_image
     SDL3::SDL3              # If using satellite libraries, SDL must be the last item in the list.
+    ZLIB::ZLIB
 )
+
 target_compile_definitions(${EXECUTABLE_NAME} PUBLIC SDL_MAIN_USE_CALLBACKS)
 
 # Dealing with assets
@@ -173,7 +207,6 @@ else()
         add_custom_command(POST_BUILD
             TARGET "${EXECUTABLE_NAME}"
 		    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_LIST_DIR}/src/${filename}" "${outname}"
-		    DEPENDS "${filename}"
 	    )
     endmacro()
     copy_helper("Inter-VariableFont.ttf")

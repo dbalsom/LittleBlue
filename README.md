@@ -41,7 +41,7 @@ XTCE-Blue integrates several device implementations ported from [MartyPC](https:
  - VRAM viewer
  - Stack display
  - Instruction disassembly display
- - Video card Status display
+ - Video card status display
 
 ## Hardware Implementation Status
 

@@ -597,6 +597,11 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
                     }
                     SDL_PutAudioStreamData(app->pc_speaker_stream, temp, n * sizeof(int16_t));
                 }
+
+                // Stop executing slices if the machine has stopped (breakpoint, etc)
+                if (!app->machine->isRunning()) {
+                    break;
+                }
             }
         }
         else {
@@ -670,6 +675,36 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
             // Add debugger windows (managed by DebuggerManager) - this will include
             // Memory Viewer, VRAM Viewer, Cycle Log, etc., because they've been registered.
             app->dbg_manager.drawMenuItems();
+
+            // Dump submenu for quick binary dumps of emulator state
+            if (ImGui::BeginMenu("Dump")) {
+                if (ImGui::MenuItem("Dump memory")) {
+                    if (app->machine) {
+                        uint8_t* ram = app->machine->ram();
+                        const size_t size = app->machine->ramSize();
+                        if (!ram || size == 0) {
+                            SDL_Log("Dump memory: RAM pointer null or size is 0");
+                        }
+                        else {
+                            std::ofstream out("memdump.bin", std::ios::binary);
+                            if (!out) {
+                                SDL_Log("Dump memory: Failed to open memdump.bin for writing: %s", SDL_GetError());
+                            }
+                            else {
+                                out.write(reinterpret_cast<const char*>(ram), static_cast<std::streamsize>(size));
+                                if (!out) {
+                                    SDL_Log("Dump memory: Failed to write RAM to file");
+                                }
+                                else {
+                                    out.flush();
+                                    SDL_Log("Dump memory: Wrote %zu bytes to memdump.bin", size);
+                                }
+                            }
+                        }
+                    }
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndMenu();
         }
 

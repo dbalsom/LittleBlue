@@ -80,10 +80,12 @@ private:
     struct FailureDetail
     {
         std::string file; // base filename
+        int cycles_taken; // cycles executed
         size_t test_index; // test index
         std::string test_name; // test name
         std::string message; // human-readable failure message
         std::vector<uint16_t> regs; // snapshot of REG16 registers in Moo::REG16 order
+        std::deque<std::string> cycle_logs; // per-cycle logs (if any)
     };
 
     std::vector<FailureDetail> failure_details_;

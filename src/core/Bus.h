@@ -264,9 +264,9 @@ public:
                 break;
             case s2:
                 // Device read/write occurs on S2
-                if (dmac_.channel() == 2) {
+                if (dmac_.getActiveChannel() == 2) {
                     // Servicing FDC
-                    auto addr = dmac_.address();
+                    auto addr = dmac_.getAddress();
 
                     if (dmac_.isReading()) {
                         std::cout << std::format("DMAC Channel 2 READ from address {:05X}\n", addr);
@@ -277,7 +277,7 @@ public:
                         ram_[addr & 0xFFFFF] = b;
                     }
                     dmac_.service();
-                    if (dmac_.terminalCount()) {
+                    if (dmac_.isAtTerminalCount()) {
                         // Notify FDC that DMA operation is complete
                         std::cout << "DMAC Channel 2 terminal count reached, notifying FDC\n";
                         fdc_.dmaDeviceEOP();
@@ -463,7 +463,7 @@ public:
     bool getDMADelayedT2() { return dma_state_ == sDelayedT2; }
 
     uint32_t getDMAAddress() {
-        return dmaAddressHigh(dmac_.channel()) + dmac_.address();
+        return dmaAddressHigh(dmac_.getActiveChannel()) + dmac_.getAddress();
     }
 
     void setLock(bool lock) { lock_ = lock; }
@@ -582,7 +582,7 @@ private:
     CGA cga_;
     FDC fdc_;
     Keyboard kb_;
-    uint8_t dip_switch1_{0b0010'1101};
+    uint8_t dip_switch1_{0b0110'1101};
     int pit_phase_;
     bool last_counter0_output_;
     bool last_irq6_{false};

@@ -5,7 +5,6 @@
 #include <vector>
 #include <deque>
 #include <unordered_map>
-#include <optional>
 #include <algorithm>
 #include <cassert>
 #include <format>
@@ -213,7 +212,10 @@ public:
     // For DMA channel 2 cycles:
     //  * In Read Data op (device->mem), DMAC must call this to get next byte.
     uint8_t dmaDeviceRead() {
-        if (op_.kind != OpKind::ReadDMA || bytes_left_ == 0) {
+        if (!op_.dma_mode && bytes_left_ == 0) {
+            return 0xFF;
+        }
+        if (op_.kind != OpKind::ReadDMA) {
             return 0xFF;
         }
         const auto& d = drives_[sel_];
@@ -222,7 +224,9 @@ public:
         if (off == SIZE_MAX) {
             return 0xFF;
         }
+
         const size_t addr = off + dma_byte_index_;
+        //std::cout << "offset: " << addr;
         const uint8_t v = (addr < d.image.size()) ? d.image[addr] : 0xFF;
         advanceByte();
         return v;
@@ -253,7 +257,7 @@ public:
 
         // Complete immediately if we're mid-op
         if (op_.kind == OpKind::ReadDMA || op_.kind == OpKind::WriteDMA || op_.kind == OpKind::FormatDMA) {
-            finalizeDataOp();
+            finalizeDataOp(true);
         }
     }
 
@@ -306,6 +310,7 @@ private:
     struct Op
     {
         OpKind kind = OpKind::None;
+        bool dma_mode = true;
         uint64_t ticks = 0;
         uint8_t C = 0, H = 0, S = 1, N = 2, EOT = 0;
     };
@@ -332,7 +337,10 @@ private:
     // Ongoing op
     Op op_{};
     size_t bytes_left_{0};
+    size_t bytes_transferred_{0};
     size_t dma_byte_index_{0};
+    uint32_t dma_start_address_{0};
+    uint16_t dma_word_count_{0};
     bool drq_{false};
 
     // Sense / IRQ
@@ -356,6 +364,7 @@ private:
         fifo_out_.clear();
         op_ = Op{};
         bytes_left_ = 0;
+        bytes_transferred_ = 0;
         dma_byte_index_ = 0;
         drq_ = false;
         irq_pending_ = false;
@@ -653,7 +662,7 @@ private:
         const uint8_t H = (dh >> 2) & 1;
         sel_ = drv;
         drives_[drv].head = H;
-        op_ = {OpKind::Seek, 0, C, H, 1, 2, 0};
+        op_ = {OpKind::Seek, true, 0, C, H, 1, 2, 0};
         busy_ = true;
     }
 
@@ -814,9 +823,18 @@ private:
     // ------------------------------ DMA helpers ------------------------------
     void startDma(const OpKind kind, const uint8_t C, const uint8_t H, const uint8_t S, const uint8_t N,
                   const uint8_t EOT, const uint32_t bps) {
-        op_ = {kind, 0, C, H, S, N, EOT};
+        op_ = {kind, true, 0, C, H, S, N, EOT};
         dma_byte_index_ = 0;
+
+        dma_start_address_ = dmac_->getAddress(2);
+        dma_word_count_ = dmac_->getWordCount(2) + 1; // +1 because count is words-1
+
+        std::cout << std::format("FDC: Starting DMA operation: address {:08X}, word count: {}\n",
+                                 dma_start_address_,
+                                 dma_word_count_);
+
         bytes_left_ = static_cast<size_t>(bps) * static_cast<size_t>((EOT >= S) ? (EOT - S + 1) : 1);
+        bytes_transferred_ = 0;
         busy_ = true;
         setDrq(true);
     }
@@ -825,16 +843,19 @@ private:
         ++dma_byte_index_;
         if (bytes_left_ > 0) {
             --bytes_left_;
+            ++bytes_transferred_;
         }
+
         if (bytes_left_ == 0) {
-            finalizeDataOp();
+            // In DMA mode, only TC signals completion, we ignore EOT
+            //finalizeDataOp();
         }
         else {
             setDrq(true);
         }
     }
 
-    void finalizeDataOp() {
+    void finalizeDataOp(bool eop) {
         setDrq(false);
         auto& d = drives_[sel_];
         // Advance CHS to next sector
@@ -870,7 +891,10 @@ private:
         op_ = Op{};
         d.sector = std::min<uint8_t>(lastR, d.max_sectors);
         // Signal completion via IRQ6
-        std::cout << "FDC: DMA operation complete, raising IRQ\n";
+        std::cout << std::format("FDC: DMA operation complete. EOP: {} Transferred {} bytes. Raising IRQ\n",
+                                 eop,
+                                 bytes_transferred_);
+
         if (irq_pending_) {
             std::cerr << "FDC: ERROR: IRQ already pending when raising IRQ\n";
         }

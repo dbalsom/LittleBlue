@@ -112,6 +112,8 @@ void CpuStatusWindow::show(bool* open) {
             ImGui::Text("PC: %04X", regs[reg_to_idx(Register::PC)]);
             ImGui::NextColumn();
             ImGui::Text("IP: %04X", ip); //ImGui::NextColumn();
+            ImGui::NextColumn();
+            ImGui::Text("IND: %04X", _machine->getCpu()->getInstructionPointer());
 
             ImGui::Separator();
             ImGui::Columns(1, nullptr, false);
@@ -227,9 +229,10 @@ void CpuStatusWindow::show(bool* open) {
                 }
             }
 
+            // Display prefetch queue contents
             ImGui::Separator();
             ImGui::Columns(1, nullptr, false);
-            ImGui::Text("Queue: %s", _machine->getQueueString().c_str());
+            ImGui::Text("Queue: %s", _machine->getCpu()->getQueueDebugString().c_str());
 
             ImGui::Separator();
             ImGui::Columns(1, nullptr, false);

@@ -192,30 +192,53 @@ public:
         }
     }
 
-    bool isReading() {
-        if (channel_ > 0) {
-            auto& c = channels_[channel_ & 3];
-
-            return c.isReadMode();
+    [[nodiscard]]
+    bool isReading(int channel = -1) const {
+        if (channel == -1) {
+            channel = channel_;
         }
-        return false;
+        if (channel == -1) {
+            return false;
+        }
+        auto& c = channels_[channel_ & 3];
+
+        return c.isReadMode();
     }
 
-    bool isWriting() {
-        if (channel_ > 0) {
-            auto& c = channels_[channel_ & 3];
-
-            return c.isWriteMode();
+    [[nodiscard]]
+    bool isWriting(int channel = -1) const {
+        if (channel == -1) {
+            channel = channel_;
         }
-        return false;
+        if (channel == -1) {
+            return false;
+        }
+        auto& c = channels_[channel_ & 3];
+        return c.isWriteMode();
     }
 
-    [[nodiscard]] uint16_t address() const {
-        if (channel_ == -1) {
-            return 0;
+    [[nodiscard]]
+    uint16_t getAddress(int channel = -1) const {
+        if (channel == -1) {
+            channel = channel_;
         }
-        const uint16_t address = channels_[channel_].current_address;
+        if (channel == -1) {
+            return false;
+        }
+        const uint16_t address = channels_[channel & 3].current_address;
         return address;
+    }
+
+    [[nodiscard]]
+    uint16_t getWordCount(int channel = -1) const {
+        if (channel == -1) {
+            channel = channel_;
+        }
+        if (channel == -1) {
+            return false;
+        }
+        const uint16_t count = channels_[channel & 3].current_word_count;
+        return count;
     }
 
     uint16_t service() {
@@ -234,14 +257,19 @@ public:
         return c.current_address;
     }
 
-    [[nodiscard]] bool terminalCount() const {
-        if (channel_ == -1) {
+    [[nodiscard]]
+    bool isAtTerminalCount(int channel = -1) const {
+        if (channel == -1) {
+            channel = channel_;
+        }
+        if (channel == -1) {
             return false;
         }
-        return channels_[channel_ & 3].isAtTerminalCount();
+        return channels_[channel & 3].isAtTerminalCount();
     }
 
-    [[nodiscard]] int channel() const {
+    [[nodiscard]]
+    int getActiveChannel() const {
         return channel_;
     }
 
@@ -329,15 +357,17 @@ private:
         [[nodiscard]] bool isCascade() const { return (mode & 0xc0) == 0xc0; }
         [[nodiscard]] bool isAtTerminalCount() const { return tc; }
 
-        uint16_t base_address;
-        uint16_t base_word_count;
-        uint16_t current_address;
-        uint16_t current_word_count;
-        uint8_t mode; // Only 6 bits used
+        uint16_t base_address{};
+        uint16_t base_word_count{};
+        uint16_t current_address{};
+        uint16_t current_word_count{};
+        uint8_t mode{}; // Only 6 bits used
         bool tc = false;
     };
 
-    bool memoryToMemory() { return (command_ & 1) != 0; }
+    [[nodiscard]]
+    bool memoryToMemory() const { return (command_ & 1) != 0; }
+
     bool channel0AddressHold() { return (command_ & 2) != 0; }
     bool disabled() { return (command_ & 4) != 0; }
     bool compressedTiming() { return (command_ & 8) != 0; }

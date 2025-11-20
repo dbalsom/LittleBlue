@@ -130,7 +130,7 @@ bool TestRunner::runTestFile(const std::filesystem::path& filepath, size_t max_t
 }
 
 bool TestRunner::runTest(TestContext& ctx, const Moo::Reader::Test& test, const std::filesystem::path& filepath) {
-    std::cout << std::format("Running test [{}/{}]: {:<50}", test.index, ctx.max_tests, test.name) << "\n";
+    //std::cout << std::format("Running test [{}/{}]: {:<50}", test.index, ctx.max_tests, test.name) << "\n";
 
     auto& cpu = ctx.cpu;
     // Reset CPU
@@ -158,8 +158,11 @@ bool TestRunner::runTest(TestContext& ctx, const Moo::Reader::Test& test, const 
         cpu.getBus()->ram()[address & 0xFFFFF] = value;
     }
 
+    cpu.setCycleLogging(true);
+    cpu.setTestNumber(test.index);
+
     // Run the instruction (ignore cycle count)
-    cpu.stepToNextInstruction();
+    auto cycles_taken = cpu.stepToNextInstruction();
     // Cycle one more time to let any terminating write complete
     cpu.run_for(1);
 
@@ -184,12 +187,17 @@ bool TestRunner::runTest(TestContext& ctx, const Moo::Reader::Test& test, const 
                 fd.file = fname;
                 fd.test_name = test.name;
                 fd.test_index = test.index;
+                fd.cycles_taken = cycles_taken;
                 fd.message = std::format("FLAGS mismatch: expected {:#04X}, got {:#04X} | {}",
                                          static_cast<unsigned>(expected), static_cast<unsigned>(actual), diff);
                 // capture register snapshot in REG16 order
                 for (const auto rr : Moo::REG16Range()) {
                     fd.regs.push_back(cpu.getRegister(MooRegToRegister(rr)));
                 }
+
+                // capture cycle logs
+                fd.cycle_logs = cpu.getCycleLogBuffer();
+
                 failure_details_.push_back(std::move(fd));
                 test_failed = true;
                 flag_failed_in_test = true;
@@ -199,12 +207,14 @@ bool TestRunner::runTest(TestContext& ctx, const Moo::Reader::Test& test, const 
                 fd.file = fname;
                 fd.test_name = test.name;
                 fd.test_index = test.index;
+                fd.cycles_taken = cycles_taken;
                 fd.message = std::format("Register {} mismatch: expected {:04X}, got {:04X}",
                                          GetRegisterString(MooRegToRegister(r)), static_cast<unsigned>(expected),
                                          static_cast<unsigned>(actual));
                 for (const auto rr : Moo::REG16Range()) {
                     fd.regs.push_back(cpu.getRegister(MooRegToRegister(rr)));
                 }
+                fd.cycle_logs = cpu.getCycleLogBuffer();
                 failure_details_.push_back(std::move(fd));
                 test_failed = true;
                 reg_failed_in_test = true;
@@ -222,6 +232,7 @@ bool TestRunner::runTest(TestContext& ctx, const Moo::Reader::Test& test, const 
             fd.file = fname;
             fd.test_name = test.name;
             fd.test_index = test.index;
+            fd.cycles_taken = cycles_taken;
             fd.message = std::format("Memory[{:#05X}] mismatch: expected {:02X}, got {:02X}",
                                      static_cast<unsigned>(address), static_cast<unsigned>(expected),
                                      static_cast<unsigned>(actual));
@@ -325,9 +336,17 @@ void TestRunner::printSummary() const {
         for (const auto& fd : failure_details_) {
             std::cout << std::format("File: {} Test [{:>05}]: {:<40} {}\n", fd.file, fd.test_index, fd.test_name,
                                      fd.message);
+
+            std::cout << "  Cycles taken: " << fd.cycles_taken << "\n";
             if (!fd.regs.empty()) {
                 std::cout << "  Registers:\n";
                 printRegisters(fd.regs, 2);
+            }
+
+            if (!fd.cycle_logs.empty()) {
+                for (const auto& log_line : fd.cycle_logs) {
+                    std::cout << "    " << log_line << "\n";
+                }
             }
         }
     }

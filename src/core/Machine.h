@@ -87,7 +87,6 @@ public:
     uint16_t* getMainRegisters() { return cpu_.getMainRegisters(); }
     uint16_t* registers() { return cpu_.getRegisters(); }
     uint16_t getRealIP() { return cpu_.getRealIP(); }
-    std::string getQueueString() const { return cpu_.getQueueString(); }
 
     // Breakpoint control: forward to CPU
     void setBreakpoint(uint16_t cs, uint16_t ip) { cpu_.setBreakpoint(cs, ip); }

@@ -1,8 +1,8 @@
 #ifndef CPU_H
 #define CPU_H
 
-#include <cstdint>
 #include <iostream>
+#include <iomanip>
 #include <string>
 #include <format>
 #include <SDL3/SDL_log.h>
@@ -57,27 +57,36 @@ constexpr size_t reg_to_idx(Register r) {
     return static_cast<size_t>(r);
 }
 
-template <typename BusType = Bus>
+template <typename BusType = Bus, typename WordT = uint8_t, std::size_t QueueLen = 4>
 class Cpu
 {
+    static_assert(
+        std::is_same<WordT, uint8_t>::value ||
+        std::is_same<WordT, uint16_t>::value,
+        "Cpu WordT must be uint8_t or uint16_t"
+        );
+    static_assert(QueueLen > 0, "QueueLen must be > 0");
+
     enum GroupDecodeFlags
     {
-        groupMemory = 1,
-        groupInitialEARead = 2,
-        groupMicrocodePointerFromOpcode = 4,
-        groupNonPrefix = 8,
-        groupEffectiveAddress = 0x10,
-        groupAddSubBooleanRotate = 0x20,
-        groupNonFlagSet = 0x40,
-        groupMNotAccumulator = 0x80,
-        groupNonSegregEA = 0x100,
-        groupNoDirectionBit = 0x200,
-        groupMicrocoded = 0x400,
-        groupNoWidthInOpcodeBit0 = 0x800,
-        groupByteOrWordAccess = 0x1000,
+        // The original 15 outputs of the Group decode PLA
+        groupMemory = 1, // This signal controls the M/IO (S2) status line
+        groupInitialEARead = 2, // This signal indicates that the effective address is read by the instruction.
+        groupMicrocodePointerFromOpcode = 4, // Group 3/4/5 opcode - microcode address will be determined by ModR/M.
+        groupNonPrefix = 8, // This line controls whether the instruction is a prefix or not.
+        groupEffectiveAddress = 0x10, // This signal indicates whether the instruction has a ModR/M byte.
+        groupAddSubBooleanRotate = 0x20, // This signal specifies the top bit for an ALU operation.
+        groupNonFlagSet = 0x40, // This signal determines whether the instruction directly updates flags (not CMC).
+        groupMNotAccumulator = 0x80, // This signal controls whether the instruction uses the AL or AX register for M.
+        groupNonSegregEA = 0x100, // This signal controls whether an instruction indexes a segment register.
+        groupNoDirectionBit = 0x200, // This signal controls whether an opcode encodes a direction bit.
+        groupMicrocoded = 0x400, // This signal indicates whether the instruction is microcoded or not.
+        groupNoWidthInOpcodeBit0 = 0x800, // This signal indicates whether the opcode encodes width in bit 0
+        groupByteOrWordAccess = 0x1000, // This signal indicates whether the instruction accesses byte or word data.
         groupF1ZZFromPrefix = 0x2000,
-        groupIncDec = 0x4000,
+        groupIncDec = 0x4000, // This signal indicates whether carry is allowed to be updated.
 
+        // Direct column outputs
         groupLoadRegisterImmediate = 0x10000,
         groupWidthInOpcodeBit3 = 0x20000,
         groupCMC = 0x40000,
@@ -86,6 +95,8 @@ class Cpu
         groupSegmentOverride = 0x200000,
         groupLOCK = 0x400000,
         groupCLI = 0x800000,
+
+        // This is not part of the PLA outputs, but we derive it here for convenience
         groupLoadSegmentRegister = 0x1000000,
     };
 
@@ -109,6 +120,13 @@ public:
         stateHalting1,
         stateHalted,
         stateSuspending,
+    };
+
+    // Prefetch queue entry
+    struct QueueEntry
+    {
+        uint8_t data; // fetched byte
+        uint16_t address; // ind at which byte was fetched
     };
 
     // Default constructor: default-construct the bus and initialize CPU state
@@ -140,10 +158,14 @@ public:
         _stopSeg = stopSeg;
     }
 
-    void setInitialIP(int v) { ip() = v; }
-    [[nodiscard]] uint64_t cycle() const { return _cycle >= 11 ? _cycle - 11 : 0; }
+    uint16_t getInstructionPointer() const {
+        return _inst_address;
+    }
 
-    [[nodiscard]] std::string log() const {
+    void setInitialIP(int v) { pc() = v; }
+    uint64_t cycle() const { return _cycle >= 11 ? _cycle - 11 : 0; }
+
+    std::string log() const {
         // Assemble buffered lines into a single string on request
         std::string out;
         for (const auto& s : _logBuffer) {
@@ -159,7 +181,6 @@ public:
         }
         setBytePointers();
         _inst_boundary = false;
-        _restore_flags = false;
         _registers[1] = 0xFFFF; // RC (CS)
         _registers[21] = 0xFFFF; // ONES
         _registers[15] = 2; // FLAGS
@@ -171,12 +192,13 @@ public:
         _snifferDecoder.reset();
         _prefetching = true;
         _logBuffer.clear();
-        ip() = 0;
+        pc() = 0;
         _nmiRequested = false;
         _alu = 0;
         _aluInput = 0;
         _queueBytes = 0;
         _queue = 0;
+        _newQueue = {};
         _segmentOverride = -1;
         _f1 = false;
         _repne = false;
@@ -199,6 +221,7 @@ public:
 
         // Reset flags
         _carry = false;
+        _carryLatch = false;
         _zero = false;
         _superZero = false;
         _auxiliary = false;
@@ -279,11 +302,16 @@ public:
         return _registers[reg_to_idx(r)];
     }
 
-    // Backwards-compatible wrapper: some code calls getRealIP()
-    uint16_t getRealIP() { return ip() - _queueBytes; }
+    uint16_t getRealIP() {
+        return pc() - _queueBytes;
+    }
+
+    void setTestNumber(uint32_t n) {
+        _testNumber = n;
+    }
 
     // Breakpoint API
-    void setBreakpoint(uint16_t cs, uint16_t ip) {
+    void setBreakpoint(const uint16_t cs, const uint16_t ip) {
         _breakpoint_cs = cs;
         _breakpoint_ip = ip;
         _hasBreakpoint = true;
@@ -342,9 +370,10 @@ private:
 
         std::cout << "CPU initializing." << std::endl;
 
-        // Initialize microcode data and put it in a format more suitable for
-        // software emulation.
-        static const bool use8086 = false;
+        // Initialize the microcode data and put it in a format more suitable for interpreting
+
+        // Select 8086 based on template WordT parameter.
+        static const bool use8086 = std::is_same<WordT, uint16_t>::value;
 
         // Initialize an array to hold the 512 21-bit microcode instruction words.
         uint32_t instructions[512];
@@ -353,55 +382,72 @@ private:
         }
 
         // Load the main microcode ROM
-        // Iterate through the four vertical blocks of ROM data.
-        for (int y = 0; y < 4; ++y) {
-
-            // Height of the first three blocks is 24, last block is 12.
-            int h = (y < 3 ? 24 : 12);
-
-            // Iterate through left and right halves of each block.
+        // Iterate through 84 rows of microcode data.
+        for (int y = 0; y < 84; ++y) {
+            // Iterate through left and right columns.
             for (int half = 0; half < 2; ++half) {
-                std::string filename = (half == 1 ? "l" : "r") + decimal(y) + (use8086 ? "a" : "") + ".txt";
-#if DEBUG_MC
-                std::cout << filename << std::endl;
-#endif
+                std::string filename = (half == 1 ? "l" : "r");
+                filename += (use8086 ? "a" : "");
                 std::string_view s = get_file(filename);
-#if DEBUG_MC
-                std::cout << s;
-#endif
-                // Iterate through height of block (24 or 12 rows).
-                for (int yy = 0; yy < h; ++yy) {
-                    // Instruction base row index (24 rows per block).
-                    int ib = y * 24 + yy;
-                    // Iterate through the width of the ROM block (64).
-                    for (int xx = 0; xx < 64; ++xx) {
-                        int b = s[yy * (64 + LINE_ENDING_SIZE) + (63 - xx)] == '0' ? 1 : 0;
-                        instructions[xx * 8 + half * 4 + yy % 4] |= (b << (20 - (ib >> 2)));
-                    }
+                // Iterate through the width of the ROM block (64).
+                for (int x = 0; x < 64; ++x) {
+                    int b = s[y * (64 + LINE_ENDING_SIZE) + (63 - x)] == '0' ? 1 : 0;
+                    instructions[x * 8 + half * 4 + y % 4] |= (b << (20 - (y >> 2)));
                 }
             }
         }
 
         for (int i = 0; i < 512; ++i) {
-            int d = instructions[i];
+            int w = instructions[i];
 #if DEBUG_MC
-            std::cout << std::format("{:03X}: {:021b}\n", i, static_cast<unsigned int>(d));
+            std::cout << std::format("{:03X}: {:021b}\n", i, static_cast<unsigned int>(w));
 #endif
-            int s = ((d >> 13) & 1) + ((d >> 10) & 6) + ((d >> 11) & 0x18);
-            int dd = ((d >> 20) & 1) + ((d >> 18) & 2) + ((d >> 16) & 4) + ((d >> 14) & 8) + ((d >> 12) & 0x10);
-            int typ = (d >> 7) & 7;
-            if ((typ & 4) == 0)
+
+            // The microcode word is somewhat scrambled compared to the word layout diagram you may have seen in online
+            // documentation. We unscramble it here and store the decoded fields in the _microcode array.
+
+            // See https://www.righto.com/2022/11/how-8086-processors-microcode-engine.html for an in-depth description
+            // of the microcode format.
+
+            // Decode Type. There are 6 different types of micro-instruction, implying a different word format.
+            // All word formats share a source field, destination field, and 'update flags' flag, so we can decode the
+            // common fields here.
+
+            // The type field is either 2 or 3 bits. If 3 bits, the high bit is set.
+            int typ = (w >> 7) & 7;
+            if ((typ & 4) == 0) {
+                // High bit is not set, so this is a 2-bit type field. Shift right to discard the low bit.
                 typ >>= 1;
-            int f = (d >> 10) & 1;
-            _microcode[i * 4] = dd;
+            }
+
+            // Decode Source field
+            int s = ((w >> 13) & 1) + ((w >> 10) & 6) + ((w >> 11) & 0x18);
+
+            // Decode Destination field
+            int d = ((w >> 20) & 1) + ((w >> 18) & 2) + ((w >> 16) & 4) + ((w >> 14) & 8) + ((w >> 12) & 0x10);
+
+            // Decode 'update flags' flag
+            int f = (w >> 10) & 1;
+
+            // _microcode has four bytes for each decoded word - Destination, Source, (F + type), Operands
+            _microcode[i * 4] = d;
             _microcode[i * 4 + 1] = s;
-            _microcode[i * 4 + 2] = (f << 3) + typ;
-            _microcode[i * 4 + 3] = d & 0xff;
+            _microcode[i * 4 + 2] = (f << 3) + typ; // Pack F and type together
+            _microcode[i * 4 + 3] = w & 0xff; // Low 8 bits are operands - they require further unpacking.
         }
+
 #if DEBUG_MC
         std::cout << "Instruction words loaded." << std::endl;
 #endif
+
         // Read in the stage1 decoder PLA ROM logic.
+        // The 8088 utilizes a "match decoder" which takes an 11-bit input and activates one column of the microcode
+        // ROM. This decoder is implemented as a programmable logic array (PLA) with 128 columns. The match logic
+        // allows a match on 0, 1, or "don't care" for each of the 11 input bits.
+
+        // To implement efficient microcode lookups, we expand the PLA data into a full 11-bit (2048-entry) lookup
+        // table, _microcodeIndex. This LUT is by nature sparse, but we shouldn't ever attempt to access a non-mapped
+        // entry during normal operation.
         int stage1[128];
         for (int x = 0; x < 128; ++x) {
             stage1[x] = 0;
@@ -438,33 +484,43 @@ private:
             }
         }
 
-        // Unpack the stage1 data into a more usable format.
+        // Iterate through all possible 11-bit input combinations (2048), simulating all possible inputs into the
+        // decoder PLA.
         for (int i = 0; i < 2048; ++i) {
             static const int ba[] = {7, 2, 1, 0, 5, 6, 8, 9, 10, 3, 4};
 
-            // Scan through the decoder
+            // Scan through the decoder. There is one decoder column for every 4 microcode words.
             for (int j = 0; j < 128; ++j) {
                 int s1 = stage1[j];
-                // Skip empty decoder slots
+                // Skip empty decoder slots as they cannot match anything
                 if (s1 == 0) {
                     continue;
                 }
-                bool found = true;
-                // The decoder uses 10 bit matches.
+                bool matches = true;
+                // The decoder uses 11-bit matches. Increment a bit index from 0..10.
                 for (int b = 0; b < 11; ++b) {
                     int x = (s1 >> (ba[b] * 2)) & 3;
                     int ib = (i >> (10 - b)) & 1;
                     if (!(x == 0 || (x == 1 && ib == 1) || (x == 2 && ib == 0))) {
-                        found = false;
+                        matches = false;
                         break;
                     }
                 }
-                if (found) {
+
+                if (matches) {
+                    // This 11-bit input matches this decoder column, save it to the LUT.
                     _microcodeIndex[i] = j;
                     break;
                 }
             }
         }
+
+        // Decode the translation PLA.
+        // The translation PLA takes 8 bits of input and outputs a full 13-bit microcode address and a 1-bit segment
+        // specifier.
+
+        // The inputs vary depending on the type of lookup.
+        // For looking up an EA calculation microcode address, the inputs are 5 bits from the ModRM byte.
 
         std::string translationFile = use8086 ? "translation_8086.txt" : "translation_8088.txt";
 #if DEBUG_MC
@@ -474,7 +530,7 @@ private:
         int tsp = 0;
         char c = translationString[0];
 
-        // Iterate through the first 32 rows of the translation file (empty lines will be skipped)
+        // Iterate through the first 33 rows of the translation file (empty lines will be skipped)
         for (int i = 0; i < 33; ++i) {
             int mask = 0;
             int bits = 0;
@@ -489,31 +545,28 @@ private:
                 if (c == '1') {
                     bits |= 128 >> j;
                 }
-                ++tsp;
-                c = translationString[tsp];
+                c = translationString[++tsp];
             }
 
             // Iterate through the 14-character addresses corresponding to each match mask
             for (int j = 0; j < 14; ++j) {
                 while (c != '0' && c != '1') {
-                    ++tsp;
-                    c = translationString[tsp];
+                    // Skip any whitespace
+                    c = translationString[++tsp];
                 }
                 if (c == '1') {
+                    // Set the corresponding output bit
                     output |= 8192 >> j;
                 }
-                ++tsp;
-                c = translationString[tsp];
+                c = translationString[++tsp];
             }
-            // Consume whitespace
+            // Consume rest of line
             while (c != 0x0A) {
-                ++tsp;
-                c = translationString[tsp];
+                c = translationString[++tsp];
             }
             // Consume newlines
             while (c == 0x0A) {
-                ++tsp;
-                c = translationString[tsp];
+                c = translationString[++tsp];
             }
 
             for (int j = 0; j < 256; ++j) {
@@ -526,6 +579,12 @@ private:
             }
         }
 
+        // Decode the group decode PLA.
+        // The group decode PLA takes 9 bits of input (from opcode and prefixes) and outputs 15 control bits.
+
+        // For a detailed examination of the group decode PLA, see
+        // https://www.righto.com/2023/05/8086-processor-group-decode-rom.html
+
         int groupInput[38 * 18];
         int groupOutput[38 * 15];
         std::string_view groupString = get_file("group.txt");
@@ -537,7 +596,7 @@ private:
                 groupOutput[y * 38 + x] = groupString[y * (38 + LINE_ENDING_SIZE) + x] == '0' ? 0 : 1;
             }
             for (int y = 0; y < 18; ++y) {
-                int c = groupString[((y / 2) + 15) * (38 + LINE_ENDING_SIZE) + x];
+                c = groupString[((y / 2) + 15) * (38 + LINE_ENDING_SIZE) + x];
                 if ((y & 1) == 0) {
                     groupInput[y * 38 + x] = (c == '*' || c == '0') ? 1 : 0;
                 }
@@ -549,6 +608,7 @@ private:
         static const int groupYY[18] = {1, 0, 3, 2, 4, 6, 5, 7, 11, 10, 12, 13, 8, 9, 15, 14, 16, 17};
         for (int x = 0; x < 34; ++x) {
             if (x == 11) {
+                // Column 11 doesn't activate any outputs.
                 continue;
             }
 
@@ -617,34 +677,49 @@ private:
     }
 
     uint8_t queueRead() {
-        const uint8_t q = _queue & 0xff;
+        const uint8_t q1 = _queue & 0xff;
+        uint8_t q2 = 0;
+        _newQueue.pop(q2);
+        assert(q1 == q2);
         _dequeueing = true;
         _snifferDecoder.queueOperation(3);
-        return q;
+        return q1;
     }
 
-    [[nodiscard]] int modRMReg() const { return (_modRM >> 3) & 7; }
-    [[nodiscard]] int modRMReg2() const { return _modRM & 7; }
-    uint16_t& rw(int r) { return _registers[24 + r]; }
+    int modRMReg() const { return (_modRM >> 3) & 7; }
+    int modRMReg2() const { return _modRM & 7; }
+    uint16_t& rw(const int r) { return _registers[24 + r]; }
     uint16_t& rw() { return rw(_opcode & 7); }
     uint16_t& ax() { return rw(0); }
-    uint8_t& rb(int r) { return *_byteRegisters[r]; }
-    uint8_t& al() { return rb(0); }
-    uint16_t& sr(int r) { return _registers[r & 3]; }
+    uint8_t& rb(const int r) const { return *_byteRegisters[r]; }
+    uint8_t& al() const { return rb(0); }
+    uint16_t& sr(const int r) { return _registers[r & 3]; }
     uint16_t& cs() { return sr(1); }
+
+    // The carry flag is special and is gated by a latch to prevent it from being updated during certain instructions.
+    // The group decode ROM output groupIncDec forces this latch low.
+    // The carry latch starts low at microcode execution start so that EA calculations do not update the carry flag.
+    // The RCY microcode operation can also set the carry latch low.
+    void setAluCF(const bool v) {
+        if (_carryLatch && (_group & groupIncDec) == 0) {
+            _carry = v;
+        }
+    }
+
+    bool getAluCF() const { return _carry; }
     bool cf() { return lowBit(flags()); }
-    void setCF(bool v) { flags() = (flags() & ~1) | (v ? 1 : 0); }
+    void setCF(const bool v) { flags() = (flags() & ~1) | (v ? 1 : 0); }
     bool pf() { return (flags() & 4) != 0; }
     bool af() { return (flags() & 0x10) != 0; }
     bool zf() { return (flags() & 0x40) != 0; }
     bool sf() { return (flags() & 0x80) != 0; }
     bool intf() { return (flags() & 0x200) != 0; }
-    void setIF(bool v) { flags() = (flags() & ~0x200) | (v ? 0x200 : 0); }
+    void setIF(const bool v) { flags() = (flags() & ~0x200) | (v ? 0x200 : 0); }
     bool df() { return (flags() & 0x400) != 0; }
-    void setDF(bool v) { flags() = (flags() & ~0x400) | (v ? 0x400 : 0); }
+    void setDF(const bool v) { flags() = (flags() & ~0x400) | (v ? 0x400 : 0); }
     bool of() { return (flags() & 0x800) != 0; }
-    void setOF(bool v) { flags() = (flags() & ~0x800) | (v ? 0x800 : 0); }
-    uint16_t& ip() { return _registers[4]; }
+    void setOF(const bool v) { flags() = (flags() & ~0x800) | (v ? 0x800 : 0); }
+    uint16_t& pc() { return _registers[4]; }
     uint16_t& ind() { return _registers[5]; }
     uint16_t& opr() { return _registers[6]; }
     uint16_t& tmpa() { return _registers[12]; }
@@ -723,12 +798,29 @@ private:
     }
 
     void readFlags() {
-        _carry = cf(); // Just for SALC
-        _overflow = of(); // Not sure if the other flags work the same
+        _carry = cf();
+        _overflow = of();
         _parity = pf() ? 0x04 : 0;
         _sign = sf();
         _zero = zf();
         _auxiliary = af();
+    }
+
+    // Resolve the effective address calculation microcode address via the translation PLA, and set the effective base
+    // segment accordingly.
+    void lookupEACalculationAddress() {
+        // The input to the translation PLA is 8 bits, 5 of which are from the ModR/M byte.
+        // Bit 0 is don't care.
+        // Bit 1 is always set for an EA lookup.
+        // Bit 2 is don't care.
+        // Bits 3-5 are ModRM bits 0-3 (RM field).
+        // Bits 6-7 are ModRM bits 6-7 (Mod field).
+        const int t = _translation[2 + ((_modRM & 7) << 3) + (_modRM & 0xc0)];
+        // Bit 0 of the translation PLA output for an EA calculation address selects either DS or SS.
+        _segment = (lowBit(t) ? 2 : 3);
+        // Save the return address and jump to EA calculation microcode. This takes one cycle.
+        _microcodeReturn = _microcodePointer;
+        _microcodePointer = t >> 1;
     }
 
     void startMicrocodeInstruction() {
@@ -741,6 +833,9 @@ private:
         }
         if ((_group & groupByteOrWordAccess) == 0) {
             _wordSize = false; // Just for XLAT
+        }
+        if (_testNumber == 77) {
+            std::cout << "Foo";
         }
         readFlags();
         // Default is ADD tmpa (12) (assumed in EA calculations)
@@ -755,6 +850,8 @@ private:
         if ((_group & groupEffectiveAddress) != 0) {
             // This opcode has a ModR/M.
 
+            // Disable the carry latch for EA calculation
+            _carryLatch = false;
             // EALOAD and EADONE finish with RTN
             _modRM = _nextModRM;
             if ((_group & groupMicrocodePointerFromOpcode) == 0) {
@@ -762,30 +859,36 @@ private:
                     ((_opcode & 1) << 12) | ((_opcode & 8) << 4);
                 _state = stateSingleCycleWait;
             }
-            // Check that RM != 11 which would indicate a register-only operation
+            // Check that RM != 11 (which would indicate a register-only operation)
             _useMemory = ((_modRM & 0xc0) != 0xc0);
             if (_useMemory) {
-                // We have a memory operand - resolve the correct microcode address for EA calculation.
-                int t = _translation[2 + ((_modRM & 7) << 3) + (_modRM & 0xc0)];
-                // This logic selects either DS or SS based on the addressing mode.
-                _segment = (lowBit(t) ? 2 : 3);
-                // Save the return address and jump to EA calculation microcode. This takes one cycle.
-                _microcodeReturn = _microcodePointer;
-                _microcodePointer = t >> 1;
-                _restore_flags = true;
+                // We have a memory operand - resolve the correct microcode address for EA calculation via the
+                // translation PLA.
+                lookupEACalculationAddress();
                 _state = stateSingleCycleWait;
             }
         }
     }
 
+    // Not every instruction on the 8088 is microcoded - there are several small one-byte instructions that are
+    // implemented in discrete logic. These include prefixes, the flag-twiddling opcodes, as most notoriously HLT.
+    // We handle the logic for these here.
+    // Since non-microcoded instructions don't have an RNI flag, we set the 'inst_boundary' flag when they complete.
     void startNonMicrocodeInstruction() {
         _loaderState = 0;
         startInstruction();
+        // LOCK prefix
         if ((_group & groupLOCK) != 0) {
             _locking = true;
             return;
         }
+        // REP prefix
         if ((_group & groupREP) != 0) {
+            // REP prefix - set the F1 flag.
+
+            // Internally, the F1 flag is overloaded to indicate both the presence of a REP prefix and the need to run
+            // NEGATE for MUL/DIV instructions. This causes the interesting effect of inverting the product/quotient
+            // when a REP prefix is used with MUL/DIV!
             _f1 = true;
             _repne = !lowBit(_opcode);
             return;
@@ -795,24 +898,31 @@ private:
             _rni = false;
             _nx = false;
             _state = stateHaltingStart;
-            _extraHaltDelay = !((_busState == tIdle && !_t5 && !_t6 && _ioType == ioPassive) || (_t5 && _lastIOType !=
-                ioPrefetch));
+            _extraHaltDelay =
+                !((_busState == tIdle && !_t5 && !_t6 && _ioType == ioPassive)
+                    || (_t5 && _lastIOType != ioPrefetch));
             return;
         }
         if ((_group & groupCMC) != 0) {
             flags() ^= 1;
+            _inst_boundary = true;
             return;
         }
         if ((_group & groupNonFlagSet) == 0) {
             switch (_opcode & 0x06) {
                 case 0: // CLCSTC
                     setCF(_opcode & 1);
+                    _inst_boundary = true;
                     break;
                 case 2: // CLISTI
                     setIF(_opcode & 1);
+                    _inst_boundary = true;
                     break;
                 case 4: // CLDSTD
                     setDF(_opcode & 1);
+                    _inst_boundary = true;
+                    break;
+                default:
                     break;
             }
             return;
@@ -837,7 +947,6 @@ private:
     uint16_t doPass(uint16_t v) {
         _auxiliary = false;
         doPZS(v);
-        _zero = v == 0;
         return v;
     }
 
@@ -867,10 +976,18 @@ private:
             case 0x06: // XOR
                 return bitwise(a ^ tmpb());
             case 0x08: // ROL
+                if (_testNumber == 77) {
+                    std::cout << "Foo";
+                }
                 return doRotate((a << 1) | (topBit(a) ? 1 : 0), a, topBit(a));
             case 0x09: // ROR
                 return doRotate(((a & wordMask()) >> 1) | topBit(lowBit(a)), a, lowBit(a));
             case 0x0a: // LRCY
+
+                if (a == 0xAD61) {
+                    // break here
+                    //std::cout << " have 0xAD61\n";
+                }
                 return doRotate((a << 1) | (_carry ? 1 : 0), a, topBit(a));
             case 0x0b: // RRCY
                 return doRotate(((a & wordMask()) >> 1) | topBit(_carry), a, lowBit(a));
@@ -966,6 +1083,8 @@ private:
                 _auxiliary = (((v ^ a ^ 1) & 0x10) != 0);
                 break;
             case 0x1a: // COM1
+                _carry = false;
+                _overflow = false;
                 return ~a;
             case 0x1b: // NEG
                 return sub(0, a, false);
@@ -975,6 +1094,16 @@ private:
                 return a - 2; // flags never updated
         }
         return v;
+    }
+
+    void updateFlags() {
+        flags() = (flags() & 0xf702)
+            | (_overflow ? 0x800 : 0)
+            | (_sign ? 0x80 : 0)
+            | (_zero ? 0x40 : 0)
+            | (_auxiliary ? 0x10 : 0)
+            | _parity // Already shifted
+            | (_carry ? 1 : 0);
     }
 
     uint32_t readSource() {
@@ -995,22 +1124,25 @@ private:
             case 17: // B (CH)? - not used
                 return rb((_source & 3) + 4);
             case 18: // M
-                if ((_group & groupMNotAccumulator) == 0)
+                if ((_group & groupMNotAccumulator) == 0) {
+                    // This group decode ROM output forces M to use AL/AX.
                     return (_wordSize ? ax() : al());
-                if ((_group & groupEffectiveAddress) == 0)
+                }
+                if ((_group & groupEffectiveAddress) == 0) {
                     return rw();
+                }
                 return getMemOrReg(_mIsM);
             case 19: // R
-                if ((_group & groupEffectiveAddress) == 0)
+                if ((_group & groupEffectiveAddress) == 0) {
+                    // This opcode has no ModR/M, so R is encoded in the opcode.
+                    // This is used by PUSH/POP sreg instructions 06, 0E, 16, & 1E
                     return sr((_opcode >> 3) & 7);
+                }
                 return getMemOrReg(!_mIsM);
             case 20: // SIGMA
                 v = doALU();
                 if (_updateFlags) {
-                    flags() = (flags() & 0xf702) | (_overflow ? 0x800 : 0)
-                        | (_sign ? 0x80 : 0) | (_zero ? 0x40 : 0)
-                        | (_auxiliary ? 0x10 : 0) | _parity
-                        | (_carry ? 1 : 0);
+                    updateFlags();
                 }
                 return v;
             case 22: // CR
@@ -1037,36 +1169,48 @@ private:
                 rb((_destination & 3) + 4) = v;
                 break;
             case 18: // M
-                if (_alu == 7)
+                if (_alu == 7) {
+                    // If ALU operation is CMP, we don't write back to M.
                     break;
+                }
                 if ((_group & groupMNotAccumulator) == 0) {
-                    if (!_wordSize)
+                    // This opcode is fixed to use AL or AX.
+                    if (!_wordSize) {
                         al() = static_cast<uint8_t>(v);
-                    else
+                    }
+                    else {
                         ax() = v;
+                    }
                     break;
                 }
                 if ((_group & groupEffectiveAddress) == 0) {
+                    // Opcode has no ModR/M
                     if ((_group & groupLoadRegisterImmediate) != 0 && (_opcode & 8) == 0) {
+                        // Write to a byte register
                         rb(_opcode & 7) = v;
                     }
                     else if ((_group & groupWidthInOpcodeBit3) != 0 && ((_opcode & 8) != 0)) {
+                        // Write to a byte register
                         rb(_opcode & 7) = v;
                     }
                     else {
+                        // Write to a word register
                         rw() = v;
                     }
                 }
                 else {
+                    // Opcode has a ModR/M
                     setMemOrReg(_mIsM, v);
                     _skipRNI = _mIsM && _useMemory;
                 }
                 break;
             case 19: // R
-                if ((_group & groupEffectiveAddress) == 0)
+                if ((_group & groupEffectiveAddress) == 0) {
                     sr((_opcode >> 3) & 7) = v;
-                else
+                }
+                else {
                     setMemOrReg(!_mIsM, v);
+                }
                 break;
             case 20: // tmpaL
                 tmpa() = (tmpa() & 0xff00) | (v & 0xff);
@@ -1091,11 +1235,11 @@ private:
         }
     }
 
-    void busAccessDone(uint8_t high) {
+    void busAccessDone(const uint8_t high) {
         opr() |= high << 8;
         if ((_operands & 0x10) != 0) {
             _rni = true;
-            _inst_boundary = true;
+            _in_instruction = false;
         }
         switch (_operands & 3) {
             case 0: // Increment IND by 2
@@ -1107,6 +1251,8 @@ private:
             case 2: // Decrement IND by 2
                 ind() -= 2;
                 break;
+            default:
+                break;
         }
         _state = stateRunning;
     }
@@ -1116,11 +1262,12 @@ private:
             case 0: // RNI
                 if (!_skipRNI) {
                     _rni = true;
-                    _inst_boundary = true;
+                    _in_instruction = false;
                 }
                 break;
             case 1: // WB,NX
                 if (!_mIsM || !_useMemory || _alu == 7) {
+                    // Honor NX if M is R or ALU is CMP (no writeback)
                     _nx = true;
                 }
                 break;
@@ -1136,15 +1283,17 @@ private:
                 _ioType = ioPassive;
                 break;
             case 4: // RTN
-                // If we are returning from an EA calculation, restore flags.
-                if (_restore_flags) {
-                    readFlags();
-                }
+                // Normal RTN updates carry?
+                //std::cout << "Setting carry to " << _carry << std::endl;
+                setCF(_carry);
+
                 _microcodePointer = _microcodeReturn;
                 _state = stateSingleCycleWait;
                 break;
             case 5: // NX
                 _nx = true;
+                break;
+            default:
                 break;
         }
     }
@@ -1171,13 +1320,16 @@ private:
                 break;
             case 1: // precondition ALU
                 _alu = _operands >> 3;
+                // Preconditioning the ALU unlocks the carry latch.
+                _carryLatch = true;
                 _nx = lowBit(_operands);
-                if (_mIsM && _useMemory && _alu != 7 &&
-                    (_group & groupEffectiveAddress) != 0)
+                if (_mIsM && _useMemory && _alu != 7 && (_group & groupEffectiveAddress) != 0) {
                     _nx = false;
+                }
                 _aluInput = (_operands >> 1) & 3;
                 if (_alu == 0x11) {
                     // XI
+                    readFlags();
                     _alu = ((((_opcode & 0x80) != 0 ? _modRM : _opcode) >> 3) & 7) |
                         ((_opcode >> 3) & 8) |
                         ((_group & groupAddSubBooleanRotate) != 0 ? 0 : 0x10);
@@ -1191,6 +1343,7 @@ private:
                     case 1: // FLUSH
                         _queueBytes = 0;
                         _queue = 0;
+                        _newQueue.clear();
                         _snifferDecoder.queueOperation(2);
                         _queueFlushing = true;
                         break;
@@ -1202,13 +1355,16 @@ private:
                         flags() &= ~0x100;
                         break;
                     case 4: // RCY
-                        setCF(false);
+                        _carry = false;
+                        _carryLatch = false;
                         break;
                     case 6: // CCOF
+                        _carry = false;
                         setCF(false);
                         setOF(false);
                         break;
                     case 7: // SCOF
+                        _carry = true;
                         setCF(true);
                         setOF(true);
                         break;
@@ -1223,9 +1379,19 @@ private:
                 break;
             case 5: // long jump or call
             case 7:
+            {
+                int mc_ptr =
+                (((_microcodeIndex[_microcodePointer >> 2] << 2) +
+                    (_microcodePointer & 3)) << 2) >> 2;
+
+                if (mc_ptr == 0x1c5) {
+                    std::cout << "INT0: CF is " << (flags() & 1) << std::endl;
+                }
+
                 if (!condition(_operands >> 4)) {
                     break;
                 }
+                _skipRNI = false;
                 if (_type == 7) {
                     _microcodeReturn = _microcodePointer;
                 }
@@ -1234,7 +1400,15 @@ private:
                     ((_operands << 3) & 0x78) +
                     ((_group & groupInitialEARead) == 0 ? 4 : 0) +
                     ((_modRM & 0xc0) == 0 ? 1 : 0)] >> 1;
+
+                // int mc_ptr_dst =
+                // (((_microcodeIndex[_microcodePointer >> 2] << 2) +
+                //     (_microcodePointer & 3)) << 2) >> 2;
+                //std::cout << std::format("Long jump/call from {:03X} to {:03X}\n", mc_ptr, mc_ptr_dst);
                 _state = stateSingleCycleWait;
+                break;
+            }
+            default:
                 break;
         }
     }
@@ -1254,24 +1428,32 @@ private:
             case 3:
                 _ioType = ioHalt;
                 break;
+            default:
+                break;
         }
     }
 
+
+    // Main microcode execution function. Represents one cycle of the Execution Unit (EU).
     void executeMicrocode() {
         uint8_t* m;
         uint32_t v;
+
+        // Sanity check of newQueue implementation
+        _newQueue.check(_queue);
+
         switch (_state) {
             case stateRunning:
                 _lastMicrocodePointer = _microcodePointer;
                 m = &_microcode[
                     ((_microcodeIndex[_microcodePointer >> 2] << 2) +
                         (_microcodePointer & 3)) << 2];
-                _microcodePointer =
-                    (_microcodePointer & 0xfff0)
-                    | ((_microcodePointer + 1) & 0xf);
+                advanceMicrocodePointer();
                 _destination = m[0];
                 _source = m[1];
+                // Mask off the F bit from the type field.
                 _type = m[2] & 7;
+                // Unpack the F bit from the type field.
                 _updateFlags = ((m[2] & 8) != 0);
                 _operands = m[3];
                 v = readSource();
@@ -1290,7 +1472,9 @@ private:
                 }
                 // We have a byte in the queue, so resume running.
                 _state = stateRunning;
+                // We can read the source now, so we can read it and immediately write back.
                 writeDestination(readSource());
+                // Process the operands part of the microcode word.
                 doSecondHalf();
                 break;
 
@@ -1303,10 +1487,11 @@ private:
                 break;
 
             case stateWaitingForQueueIdle:
+                // This state is used by the CORR microcode operation.
                 if (_ioType != ioPassive || _busState == t4 || _t4) {
                     break;
                 }
-                ip() -= _queueBytes;
+                pc() -= _queueBytes;
                 _queueBytes = 0; // so that realIP() is correct
                 _state = stateRunning;
                 break;
@@ -1344,7 +1529,9 @@ private:
                         _ioSegment = 9;
                     }
                 }
-                _ioAddress = physicalAddress(_ioSegment, ind());
+                _ioIndex = ind();
+                _ioAddress = physicalAddress(_ioSegment, _ioIndex);
+
                 _state = stateWaitingUntilFirstByteDone;
                 busStart();
                 break;
@@ -1365,11 +1552,14 @@ private:
                 if (!_wordSize) {
                     // 8-bit access - all done this state.
                     // When reading from the bus, the high byte is set to 0xFF on byte access.
-                    busAccessDone(0xFF);
+
+                    //busAccessDone(0xFF);
+                    busAccessDone(0x00);
                 }
                 else {
                     // 16-bit access - increment the address, start the second byte.
-                    _ioAddress = physicalAddress(_ioSegment, ind() + 1);
+                    _ioIndex = ind() + 1;
+                    _ioAddress = physicalAddress(_ioSegment, _ioIndex);
                     _state = stateWaitingUntilSecondByteDone;
                     busStart();
                 }
@@ -1404,7 +1594,7 @@ private:
                 break;
 
             case stateHalting2:
-                _snifferDecoder.setStatus((int)ioHalt);
+                _snifferDecoder.setStatus(static_cast<int>(ioHalt));
                 _state = stateHalting1;
                 break;
 
@@ -1414,7 +1604,7 @@ private:
 
             case stateHalted:
                 // The CPU is halted!
-                _snifferDecoder.setStatus((int)ioPassive);
+                _snifferDecoder.setStatus(static_cast<int>(ioPassive));
                 // Stay halted until an interrupt occurs
                 if (!interruptPending()) {
                     break;
@@ -1426,7 +1616,7 @@ private:
                 }
                 // Waking up now - read the next instruction
                 _rni = true;
-                _inst_boundary = true;
+                _in_instruction = false;
                 _state = stateRunning;
                 break;
         }
@@ -1438,11 +1628,12 @@ private:
         _nextGroup = _groups[nextMicrocode >> 4];
     }
 
+    // Handles reading the next opcode byte.
+    // The 8088 processes interrupts, traps and NMI at this point, so any of these states will prevent normal opcode
+    // fetching.
     void readOpcode(const int nextState) {
-        if ((flags() & 0x100) != 0) {
-            setNextMicrocode(nextState, 0x1000);
-            return;
-        }
+        // Priority of servicing is NMI, interrupt, trap flag.
+        // See https://www.righto.com/2023/02/8086-interrupt.html
         if (_nmiRequested) {
             _nmiRequested = false;
             setNextMicrocode(nextState, 0x1001);
@@ -1452,7 +1643,22 @@ private:
             setNextMicrocode(nextState, 0x1002);
             return;
         }
+        if ((flags() & 0x100) != 0) {
+            // Trap flag is set.
+            setNextMicrocode(nextState, 0x1000);
+            return;
+        }
+
+        // No interrupt conditions, so load the next opcode byte from the prefetch queue.
         if (_queueBytes != 0) {
+            if (!_in_instruction) {
+                // Starting a new instruction
+                _inst_boundary = true;
+                _in_instruction = true;
+            }
+            QueueEntry qe = {};
+            _newQueue.peekEntry(qe);
+            _inst_address = qe.address;
             setNextMicrocode(nextState, queueRead() << 4);
             _snifferDecoder.queueOperation(1);
             return;
@@ -1480,25 +1686,32 @@ private:
         tIdle,
     };
 
-    BusState completeIO(bool write) {
-        if (!_ready)
+    // Attempt to complete the current bus cycle. If the bus is not ready, return tWait to indicate we need to continue
+    // waiting. Otherwise, complete the bus operation and return t4 to indicate the cycle is done.
+    BusState completeIO(const bool write) {
+        if (!_ready) {
             return tWait;
+        }
         if (!write) {
+            // Perform a bus read
             _ioReadData = _bus.read();
             _snifferDecoder.setData(_ioReadData);
         }
-        else
+        else {
+            // Perform a bus write
             _ioReadData = _ioWriteData;
+        }
         _bus.setPassiveOrHalt(true);
-        _snifferDecoder.setStatus((int)ioPassive);
+        _snifferDecoder.setStatus(static_cast<int>(ioPassive));
         _lastIOType = _ioType;
         _ioType = ioPassive;
         return t4;
     }
 
+    // Execute one CPU cycle.
     void simulateCycle() {
         BusState nextState = _busState;
-        bool write = _ioType == ioWriteMemory || _ioType == ioWritePort;
+        const bool write = _ioType == ioWriteMemory || _ioType == ioWritePort;
         _t6 = _t5;
         _t5 = _t4;
         _t4 = false;
@@ -1507,19 +1720,22 @@ private:
         switch (_busState) {
             case t1:
                 _snifferDecoder.setAddress(_ioAddress);
-                _bus.startAccess(_ioAddress, (int)_ioType);
+                _bus.startAccess(_ioAddress, static_cast<int>(_ioType));
                 nextState = t2;
                 break;
             case t2:
                 _snifferDecoder.setStatusHigh(_ioSegment);
-                _snifferDecoder.setBusOperation((int)_ioType);
-                if (write)
+                _snifferDecoder.setBusOperation(static_cast<int>(_ioType));
+                if (write) {
                     _snifferDecoder.setData(_ioWriteData);
-                if (_ioType == ioInterruptAcknowledge)
+                }
+                if (_ioType == ioInterruptAcknowledge) {
                     _bus.setLock(_state == stateWaitingUntilFirstByteDone);
+                }
                 nextState = t3;
                 break;
             case t3:
+                // This is a check for the prefetch delay policy.
                 if (_ioType == ioPrefetch && _queueBytes == 3 && !_dequeueing) {
                     _queueFilled = true;
                     //_cyclesUntilCanLowerQueueFilled = 3;
@@ -1530,10 +1746,12 @@ private:
                 nextState = completeIO(write);
                 break;
             case t4:
-                if (_lastIOType == ioWriteMemory || _lastIOType == ioWritePort)
+                if (_lastIOType == ioWriteMemory || _lastIOType == ioWritePort) {
                     _bus.write(_ioReadData);
-                if (_lastIOType == ioPrefetch)
+                }
+                if (_lastIOType == ioPrefetch) {
                     prefetchCompleting = true;
+                }
                 nextState = tIdle;
                 _t4 = true;
                 break;
@@ -1542,23 +1760,32 @@ private:
             _dequeueing = false;
             _queue >>= 8;
             --_queueBytes;
+            // Don't need to adjust newQueue here as we did that when popping.
         }
         //if (_cyclesUntilCanLowerQueueFilled == 0 || (_cyclesUntilCanLowerQueueFilled == 1 && _queueBytes < 3)) {
         //_cyclesUntilCanLowerQueueFilled = 0;
         if ((_queueBytes < 3 || (_busState == tIdle && (_lastIOType != ioPrefetch || (!_t4 && !_t5))))) {
-            if (_busState == tIdle && !(_t4 && _lastIOType == ioPrefetch) && _queueBytes < 4)
+            if (_busState == tIdle && !(_t4 && _lastIOType == ioPrefetch) && _queueBytes < 4) {
                 _queueFilled = false;
+            }
         }
         //}
         //else
         //    --_cyclesUntilCanLowerQueueFilled;
-        if ((_loaderState & 2) != 0)
+
+        // We can execute microcode in loader states 2 & 3.
+        if ((_loaderState & 2) != 0) {
             executeMicrocode();
+        }
+
+        // Handle LOCK prefix.
         if (_locking) {
             _locking = false;
             _lock = true;
             _bus.setLock(true);
         }
+
+        // Handle the instruction loader state machine.
         switch (_loaderState) {
             case 0:
                 readOpcode(0);
@@ -1566,19 +1793,26 @@ private:
             case 1:
             case 3:
                 if ((_group & groupNonPrefix) != 0) {
+                    // A non-prefix byte was loaded.
+                    // Clear any segment override, REP/REPE/REPNE, and LOCK state.
                     _segmentOverride = -1;
                     _f1 = false;
                     _repne = false;
+                    // Clear any previous lock condition.
                     if (_lock) {
                         _lock = false;
                         _bus.setLock(false);
                     }
                 }
-                if ((_nextGroup & groupMicrocoded) == 0) // 1BL
+                if ((_nextGroup & groupMicrocoded) == 0) {
+                    // 1BL
                     startNonMicrocodeInstruction();
+                }
                 else {
-                    if ((_nextGroup & groupEffectiveAddress) == 0) // SC
+                    if ((_nextGroup & groupEffectiveAddress) == 0) {
+                        // SC
                         startMicrocodeInstruction();
+                    }
                     else {
                         _loaderState = 1;
                         if (_queueBytes != 0) {
@@ -1590,27 +1824,34 @@ private:
                 }
                 break;
             case 2:
-                if (_rni)
+                if (_rni) {
                     readOpcode(0);
-                else {
-                    if (_nx)
-                        readOpcode(2);
                 }
+                else if (_nx) {
+                    readOpcode(2);
+                }
+                break;
+            default:
                 break;
         }
 
+        // If we just completed a prefetch, add the byte to the queue.
         if (prefetchCompleting) {
+            _newQueue.push_word(static_cast<WordT>(_ioReadData), pc());
             _queue |= (_ioReadData << (_queueBytes << 3));
             ++_queueBytes;
-            ++ip();
+            ++pc();
         }
+
         if (nextState == tIdle && _ioType != ioPassive) {
             nextState = t1;
-            if (_ioType == ioPrefetch)
-                _ioAddress = physicalAddress(_ioSegment, ip());
+            if (_ioType == ioPrefetch) {
+                _ioIndex = pc();
+                _ioAddress = physicalAddress(_ioSegment, pc());
+            }
 
             _bus.setPassiveOrHalt(_ioType == ioHalt);
-            _snifferDecoder.setStatus((int)_ioType);
+            _snifferDecoder.setStatus(static_cast<int>(_ioType));
         }
         if (canStartPrefetch()) {
             _ioType = ioPrefetch;
@@ -1621,7 +1862,7 @@ private:
             _prefetching = true;
         }
         // If cycle logging is enabled we want to capture logs regardless of the configured end cycle.
-        if (_cycleLogging || _cycle < _logEndCycle) {
+        if (_cycleLogging && _cycle < _logEndCycle) {
             _snifferDecoder.setAEN(_bus.getAEN());
             _snifferDecoder.setDMA(_bus.getDMA());
             _snifferDecoder.setPITBits(_bus.pitBits());
@@ -1635,7 +1876,7 @@ private:
                 if (_bus.getDMADelayedT2()) {
                     _snifferDecoder.setAddress(_savedAddress);
                     //_snifferDecoder.setStatus((int)_ioType);
-                    _snifferDecoder.setBusOperation((int)_ioType);
+                    _snifferDecoder.setBusOperation(static_cast<int>(_ioType));
                 }
             }
             _snifferDecoder.setReady(_ready);
@@ -1651,13 +1892,13 @@ private:
                 // Always respect console logging
                 if (_consoleLogging) {
                     std::cout << l << std::endl;
-                    //SDL_Log("%s\n", l.c_str());
                 }
                 // Also append into the ring-buffer when cycle logging is enabled
                 if (_cycleLogging) {
                     _logBuffer.push_back(l);
-                    if (_logBuffer.size() > _logCapacity)
+                    if (_logBuffer.size() > _logCapacity) {
                         _logBuffer.pop_front();
+                    }
                 }
             }
         }
@@ -1753,10 +1994,11 @@ private:
             "POSTIDIV", // negate ~tmpc if F1 set
         };
 
-        int mcLineNumber = _lastMicrocodePointer >> 2;
-        uint8_t* m = &_microcode[
-            ((_microcodeIndex[_lastMicrocodePointer >> 2] << 2) +
-                (_lastMicrocodePointer & 3)) << 2];
+        int mcIndex =
+        ((_microcodeIndex[_lastMicrocodePointer >> 2] << 2) +
+            (_lastMicrocodePointer & 3)) << 2;
+        int mcLineNumber = mcIndex >> 2;
+        uint8_t* m = &_microcode[mcIndex];
         int d = m[0];
         int s = m[1];
         int t = m[2] & 7;
@@ -2023,47 +2265,58 @@ private:
         }
         _lastMicrocodePointer = -1;
 
+        r += " alu_CF: " + std::to_string(getAluCF() ? 1 : 0) + " CF: " + std::to_string(cf() ? 1 : 0);
+
+        r += std::format(" tA: {:04X} tB: {:04X} tC: {:04X}", _registers[12], _registers[13], _registers[14]);
+
+        r += std::format(" wordSize: {}", _wordSize ? "16" : "8");
         return r;
     }
 
-    bool condition(int n) {
+    // Evaluate a microcode condition field. Usually these are used to determine whether to take a jump/call.
+    bool condition(const int n) {
         switch (n) {
-            case 0x00: // F1ZZ
-                if ((_group & groupF1ZZFromPrefix) != 0)
+            case 0x00: // F1ZZ - compare F1 to ZF
+                if ((_group & groupF1ZZFromPrefix) != 0) {
                     return zf() == (_f1 && _repne);
+                }
                 return zf() != lowBit(_opcode);
-            case 0x01: // MOD1
+            case 0x01: // MOD1 - If one byte displacement (skips second queue read).
                 return (_modRM & 0x40) != 0;
             case 0x02: // L8 - not sure if there's a better way to compute this
-                if ((_group & groupLoadRegisterImmediate) != 0)
+                if ((_group & groupLoadRegisterImmediate) != 0) {
                     return (_opcode & 8) == 0;
+                }
                 return !lowBit(_opcode) || (_opcode & 6) == 2;
-            case 0x03: // Z
+            case 0x03: // Z - if zero flag set
                 return _superZero;
-            case 0x04: // NCZ
+            case 0x04: // NCZ - Decrement count register, true if not zero
                 --_counter;
                 return _counter != -1;
             case 0x05: // TEST - no 8087 emulated yet
                 return true;
-            case 0x06: // OF
+            case 0x06: // OF - if overflow flag set
                 return of(); // only used in INTO
-            case 0x07: // CY
+            case 0x07: // CY - if carry set
                 return _carry;
-            case 0x08: // UNC
+            case 0x08: // UNC - Unconditional. Always true.
                 return true;
-            case 0x09: // NF1
+            case 0x09: // NF1 - if F1 flag not set
                 return !_f1;
-            case 0x0a: // NZ
+            case 0x0a: // NZ - if zero flag not set
                 return !_superZero;
-            case 0x0b: // X0
-                if ((_group & groupMicrocodePointerFromOpcode) == 0)
+            case 0x0b: // X0 - if bit 3 of opcode/extension is set
+                if ((_group & groupMicrocodePointerFromOpcode) == 0) {
+                    // Extension; use ModR/M instead of opcode.
                     return (_modRM & 8) != 0;
+                }
+                // Non-extension; use opcode.
                 return (_opcode & 8) != 0;
-            case 0x0c: // NCY
+            case 0x0c: // NCY - if carry not set
                 return !_carry;
-            case 0x0d: // F1
+            case 0x0d: // F1 - if F1 flag is set (REP prefix or signed multiply/divide)
                 return _f1;
-            case 0x0e: // INT
+            case 0x0e: // INT - if interrupt pending
                 return interruptPending();
             default:
                 break;
@@ -2107,9 +2360,9 @@ private:
         return _nmiRequested || (intf() && _interruptPending);
     }
 
-    uint16_t wordMask() { return _wordSize ? 0xffff : 0xff; }
+    uint16_t wordMask() const { return _wordSize ? 0xffff : 0xff; }
 
-    void doPZS(uint16_t v) {
+    void doPZS(const uint16_t v) {
         static uint8_t table[0x100] = {
             4, 0, 0, 4, 0, 4, 4, 0, 0, 4, 4, 0, 4, 0, 0, 4,
             0, 4, 4, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0, 4, 4, 0,
@@ -2147,13 +2400,13 @@ private:
 
     void doAddSubFlags(const uint32_t result, const uint32_t x, const bool of, const bool af) {
         doFlags(result, of, af);
-        _carry = ((result ^ x) & (_wordSize ? 0x10000 : 0x100)) != 0;
+        setAluCF(((result ^ x) & (_wordSize ? 0x10000 : 0x100)) != 0);
     }
 
-    bool lowBit(uint32_t v) { return (v & 1) != 0; }
-    bool topBit(int w) { return (w & (_wordSize ? 0x8000 : 0x80)) != 0; }
-    bool topBit(uint32_t w) { return (w & (_wordSize ? 0x8000 : 0x80)) != 0; }
-    uint16_t topBit(bool v) { return v ? (_wordSize ? 0x8000 : 0x80) : 0; }
+    static bool lowBit(uint32_t v) { return (v & 1) != 0; }
+    bool topBit(const int w) const { return (w & (_wordSize ? 0x8000 : 0x80)) != 0; }
+    bool topBit(const uint32_t w) const { return (w & (_wordSize ? 0x8000 : 0x80)) != 0; }
+    uint16_t topBit(const bool v) const { return v ? (_wordSize ? 0x8000 : 0x80) : 0; }
 
     uint16_t add(const uint32_t a, const uint32_t b, const bool c) {
         const uint32_t r = a + b + (c ? 1 : 0);
@@ -2197,25 +2450,227 @@ public:
     // Append a single line directly into the cycle log buffer (for diagnostics/UI)
     void appendCycleLogLine(const std::string& line) {
         _logBuffer.push_back(line);
-        if (_logBuffer.size() > _logCapacity)
+        if (_logBuffer.size() > _logCapacity) {
             _logBuffer.pop_front();
+        }
     }
 
     std::string getQueueString() const {
-        // Return the bytes in the queue as hex bytes from index 0 .. _queueBytes-1
-        if (_queueBytes <= 0)
-            return std::string();
-        std::string out;
-        for (int i = 0; i < _queueBytes; ++i) {
-            const uint8_t b = static_cast<uint8_t>((_queue >> (i * 8)) & 0xFF);
-            if (!out.empty())
-                out += ' ';
-            out += std::format("{:02X}", static_cast<unsigned>(b));
+        return _newQueue.getQueueString();
+        // // Return the bytes in the queue as hex bytes from index 0 .. _queueBytes-1
+        // if (_queueBytes <= 0)
+        //     return std::string();
+        // std::string out;
+        // for (int i = 0; i < _queueBytes; ++i) {
+        //     const uint8_t b = static_cast<uint8_t>((_queue >> (i * 8)) & 0xFF);
+        //     if (!out.empty())
+        //         out += ' ';
+        //     out += std::format("{:02X}", static_cast<unsigned>(b));
+        // }
+        // return out;
+    }
+
+    std::string getQueueDebugString() const {
+        const auto debug = _newQueue.getDebug();
+        std::ostringstream oss;
+        for (const auto& entry : debug) {
+            oss << std::format("{:02X}[{:04X}] ", static_cast<unsigned>(entry.data), entry.address);
         }
-        return out;
+        return oss.str();
     }
 
 private:
+    class InstructionQueue
+    {
+    public:
+        typedef std::size_t size_type;
+
+        InstructionQueue() :
+            head_(0)
+            , tail_(0)
+            , size_(0) {
+        }
+
+        void clear() {
+            head_ = 0;
+            tail_ = 0;
+            size_ = 0;
+        }
+
+        size_type size() const {
+            return size_;
+        }
+
+        static size_type capacity() {
+            return QueueLen;
+        }
+
+        bool isEmpty() const {
+            return size_ == 0;
+        }
+
+        bool full() const {
+            return size_ == QueueLen;
+        }
+
+        size_type freeSpace() const {
+            return QueueLen - size_;
+        }
+
+        bool hasRoom() const {
+            return freeSpace() >= sizeof(WordT);
+        }
+
+        // Push a single entry (byte + address). Returns false if full.
+        bool push(uint8_t data, uint16_t address) {
+            if (full()) {
+                return false;
+            }
+            buffer_[head_].data = data;
+            buffer_[head_].address = address;
+            advanceHead();
+            return true;
+        }
+
+        // Pop oldest entry. Returns false if empty.
+        bool popEntry(QueueEntry& out) {
+            if (isEmpty()) {
+                return false;
+            }
+            out = buffer_[tail_];
+            advanceTail();
+            return true;
+        }
+
+        bool pop(uint8_t& out) {
+            if (isEmpty()) {
+                return false;
+            }
+            out = buffer_[tail_].data;
+            advanceTail();
+            return true;
+        }
+
+        // Peek the oldest entry without removing it. Returns false if empty.
+        bool peekEntry(QueueEntry& out) const {
+            if (isEmpty()) {
+                return false;
+            }
+            out = buffer_[tail_];
+            return true;
+        }
+
+        // Push a "native word".
+        // For uint8_t: pushes one byte at address.
+        // For uint16_t: pushes two bytes (little-endian) at address, address+1.
+        // Returns false if not enough room for all bytes.
+        bool push_word(WordT word, const uint16_t address) {
+            if (const size_type bytes_needed = sizeof(WordT); freeSpace() < bytes_needed) {
+                return false;
+            }
+
+            if (std::is_same<WordT, uint8_t>::value) {
+                uint8_t b = static_cast<uint8_t>(word);
+                return push(b, address);
+            }
+
+            const uint16_t w = static_cast<uint16_t>(word);
+            const uint8_t lo = static_cast<uint8_t>(w & 0x00FFu);
+            const uint8_t hi = static_cast<uint8_t>((w >> 8) & 0x00FFu);
+
+            // We already know we have room.
+            push(lo, address);
+            push(hi, address + 1);
+            return true;
+        }
+
+        std::string getQueueString() const {
+            std::ostringstream oss;
+
+            // Print each byte from oldest (tail) to newest (head)
+            size_type index = tail_;
+            for (size_type count = 0; count < size_; ++count) {
+                const uint8_t b = buffer_[index].data;
+
+                // Two-digit upper-case hex
+                oss << std::uppercase
+                    << std::hex
+                    << std::setw(2)
+                    << std::setfill('0')
+                    << static_cast<unsigned>(b);
+
+                index = (index + 1) % QueueLen;
+            }
+
+            return oss.str();
+        }
+
+        std::vector<QueueEntry> getDebug() const {
+            std::vector<QueueEntry> out;
+            out.reserve(size_); // avoid reallocations
+
+            size_type index = tail_;
+            for (size_type count = 0; count < size_; ++count) {
+                out.push_back(buffer_[index]);
+                index = (index + 1) % QueueLen;
+            }
+
+            return out;
+        }
+
+        bool isAtPolicyLen() const {
+            const size_type sz = size_;
+            const size_type cap = QueueLen;
+
+            if (std::is_same<WordT, uint8_t>::value) {
+                // 8088: queue is "almost full" when it has capacity-1 bytes
+                return (sz == cap - 1);
+            }
+            else {
+                // 8086: queue is "almost full" when size is cap-1 or cap-2
+                // (since fetch requires 2-byte room)
+                return (sz == cap - 1) || (sz == cap - 2);
+            }
+        }
+
+        void check(const uint32_t expected) const {
+            uint32_t packed = 0;
+            size_type index = tail_;
+
+            // Only pack up to 4 bytes in FIFO order
+            const size_type limit = (size_ < 4) ? size_ : 4;
+
+            for (size_type i = 0; i < limit; ++i) {
+                const uint8_t b = buffer_[index].data;
+                packed |= (static_cast<uint32_t>(b) << (i * 8)); // little-endian
+                index = (index + 1) % QueueLen;
+            }
+
+            assert(packed == expected);
+        }
+
+    private:
+        std::array<QueueEntry, QueueLen> buffer_;
+        size_type head_; // next write
+        size_type tail_; // next read
+        size_type size_; // number of valid entries
+
+        void advanceHead() {
+            head_ = (head_ + 1) % QueueLen;
+            ++size_;
+        }
+
+        void advanceTail() {
+            tail_ = (tail_ + 1) % QueueLen;
+            --size_;
+        }
+    };
+
+    void advanceMicrocodePointer() {
+        _microcodePointer =
+            (_microcodePointer & 0xFFF0) | ((_microcodePointer + 1) & 0xf);
+    }
+
     int _stopIP;
     int _stopSeg;
 
@@ -2232,6 +2687,7 @@ private:
 
     IOType _ioType;
     uint32_t _ioAddress;
+    uint16_t _ioIndex;
     uint8_t _ioReadData;
     uint8_t _ioWriteData;
     int _ioSegment;
@@ -2241,6 +2697,7 @@ private:
 
     uint16_t _registers[32];
     uint32_t _queue;
+    InstructionQueue _newQueue{};
     int _queueBytes;
     uint8_t* _byteRegisters[8];
     uint8_t _microcode[4 * 512];
@@ -2261,6 +2718,7 @@ private:
     uint8_t _opcode;
     uint8_t _modRM;
     bool _carry{false};
+    bool _carryLatch{false}; // This latch enables updating the carry flag.
     bool _zero{false};
     bool _superZero{false};
     bool _auxiliary{false};
@@ -2271,8 +2729,9 @@ private:
     uint8_t _nextModRM;
     int _loaderState;
     bool _rni{false}; // Microcode signal to read next instruction
+    uint16_t _inst_address{0x0000};
     bool _inst_boundary{false};
-    bool _restore_flags{false};
+    bool _in_instruction{false};
     bool _nx{false}; // Microcode signal to read next instruction early (1-cycle pipeline)
     MicrocodeState _state;
     int _source;
@@ -2298,14 +2757,15 @@ private:
     bool _interruptPending;
     bool _extraHaltDelay;
     uint32_t _savedAddress;
-    bool _ready;
+    bool _ready = true;
     //int _cyclesUntilCanLowerQueueFilled;
-    bool _locking;
+    bool _locking = false;
     // Breakpoint state
     bool _hasBreakpoint = false;
     bool _breakpointHit = false;
-    uint16_t _breakpoint_cs;
-    uint16_t _breakpoint_ip;
+    uint16_t _breakpoint_cs = 0;
+    uint16_t _breakpoint_ip = 0;
+    uint32_t _testNumber = 0;
 };
 
 #endif

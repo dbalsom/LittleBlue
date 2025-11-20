@@ -2,7 +2,7 @@
 #include <imgui/imgui.h>
 #include <cmath>
 
-void DisassemblyWindow::show(bool *open) {
+void DisassemblyWindow::show(bool* open) {
     if (!_machine) {
         ImGui::Begin("Disassembly", open);
         ImGui::Text("No machine instance");
@@ -19,16 +19,17 @@ void DisassemblyWindow::show(bool *open) {
     }
 
     const uint16_t cs = s_regs[1];
-    const uint16_t ip = _machine->getRealIP();
-    const uint32_t phys = (static_cast<uint32_t>(cs) << 4) + static_cast<uint32_t>(ip);
+    //const uint16_t ip = _machine->getRealIP();
+    const uint32_t ip = _machine->getCpu()->getInstructionPointer();
+    uint32_t phys_addr = ((static_cast<uint32_t>(cs) << 4) + static_cast<uint32_t>(ip)) & 0xFFFFF;
     Disassembler disasm;
     disasm.reset();
 
-    ImGui::BeginChild("##disasm_child", ImVec2(0,0), true, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::BeginChild("##disasm_child", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
     const float line_h = ImGui::GetTextLineHeightWithSpacing();
     const ImVec2 child_avail = ImGui::GetContentRegionAvail();
     const int max_lines = std::max(1, static_cast<int>(std::floor(child_avail.y / line_h)));
-    uint32_t phys_addr = phys & 0xFFFFF; // 20-bit real-mode address
+
     uint16_t cur_ip = ip;
     for (int line = 0; line < max_lines; ++line) {
         bool first = true;
@@ -56,9 +57,11 @@ void DisassemblyWindow::show(bool *open) {
                 const uint8_t b = _machine->peekPhysical(addr_iter);
                 char buf[8];
                 snprintf(buf, sizeof(buf), "%02X", b);
-                if (!bytes_remaining.empty()) bytes_remaining += " ";
+                if (!bytes_remaining.empty())
+                    bytes_remaining += " ";
                 bytes_remaining += buf;
-                if (addr_iter == ((phys_addr - 1) & 0xFFFFF)) break;
+                if (addr_iter == ((phys_addr - 1) & 0xFFFFF))
+                    break;
             }
             ImGui::Text("%04X:%04X  %s", cs, start_ip, bytes_remaining.c_str());
             break;

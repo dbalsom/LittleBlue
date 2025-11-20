@@ -35,19 +35,22 @@ void DisassemblyWindow::show(bool* open) {
         bool first = true;
         const uint32_t startAddr = phys_addr;
         const uint16_t start_ip = cur_ip;
-        std::string out;
+        std::string out = "";
         for (int b_count = 0; b_count < 16; ++b_count) {
             const uint8_t byte = _machine->peekPhysical(phys_addr);
-            out = disasm.disassemble(byte, first);
+            const auto have_inst = disasm.disassemble(byte, first, out);
             first = false;
             phys_addr++;
             phys_addr &= 0xFFFFF;
             cur_ip = static_cast<uint16_t>(cur_ip + 1);
-            if (!out.empty()) {
-                if (startAddr >= 0xF0000) // ROM base address heuristic
+            if (have_inst) {
+                if (startAddr >= 0xF0000) {
+                    // ROM base address heuristic
                     ImGui::Text("%04X:%04X (ROM)  %s", cs, start_ip, out.c_str());
-                else
+                }
+                else {
                     ImGui::Text("%04X:%04X  %s", cs, start_ip, out.c_str());
+                }
                 break;
             }
         }
@@ -57,11 +60,13 @@ void DisassemblyWindow::show(bool* open) {
                 const uint8_t b = _machine->peekPhysical(addr_iter);
                 char buf[8];
                 snprintf(buf, sizeof(buf), "%02X", b);
-                if (!bytes_remaining.empty())
+                if (!bytes_remaining.empty()) {
                     bytes_remaining += " ";
+                }
                 bytes_remaining += buf;
-                if (addr_iter == ((phys_addr - 1) & 0xFFFFF))
+                if (addr_iter == ((phys_addr - 1) & 0xFFFFF)) {
                     break;
+                }
             }
             ImGui::Text("%04X:%04X  %s", cs, start_ip, bytes_remaining.c_str());
             break;

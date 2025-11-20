@@ -33,6 +33,7 @@ public:
         _cpu_qs = 0;
         _cpu_next_qs = 0;
 
+        _disassembly = "";
         _disassembler.reset();
     }
 
@@ -241,7 +242,6 @@ public:
         line += "] ";
 
         // Emit instruction if applicable
-        std::string instruction;
         if (_cpu_qs != 0) {
             if (_cpu_qs == 2) {
                 // Queue flushed, reset queueLength.
@@ -259,7 +259,9 @@ public:
                     line += "!g";
                     _queueLength = 0;
                 }
-                instruction = _disassembler.disassemble(b, _cpu_qs == 1);
+                if (!_disassembler.disassemble(b, _cpu_qs == 1, _disassembly)) {
+                    _disassembly = "";
+                }
             }
         }
 
@@ -319,7 +321,7 @@ public:
             line += std::string(1, qsc[_cpu_qs]);
         else
             line += " ";
-        line += " " + instruction;
+        line += " " + _disassembly;
         _lastS = _cpu_status;
         _t = _tNext;
         if (_t == 4 || _d == 4) {
@@ -336,9 +338,9 @@ public:
         return line;
     }
 
-    void queueOperation(int qs) { _cpu_next_qs = qs; }
+    void queueOperation(const int qs) { _cpu_next_qs = qs; }
 
-    void setStatus(int s) {
+    void setStatus(const int s) {
         _cpu_last_status = _cpu_status;
         _cpu_status = s;
         // Bus proceeding from PASV to any other status triggers ALE signal.
@@ -350,7 +352,7 @@ public:
         }
     }
 
-    void setStatusHigh(int segment) {
+    void setStatusHigh(const int segment) {
         _cpu_address &= 0xcffff;
         switch (segment) {
             case 0: // ES
@@ -390,14 +392,14 @@ public:
         }
     }
 
-    void setData(uint8_t data) {
+    void setData(const uint8_t data) {
         _cpu_address = (_cpu_address & 0xfff00) | data;
         _bus_data = data;
         _cpuDataFloating = false;
         _isaDataFloating = false;
     }
 
-    void setAddress(uint32_t address) {
+    void setAddress(const uint32_t address) {
         _cpu_address = address;
         _bus_address = address;
         _cpuDataFloating = false;
@@ -424,13 +426,14 @@ public:
 
 private:
     Disassembler _disassembler;
+    std::string _disassembly;
 
     // Internal variables that we use to keep track of what's going on in order
     // to be able to print useful logs.
     int _t{0}; // 0 = Tidle, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = Tw
     int _tNext{0};
     int _d{-1}; // -1 = SI, 0 = S0, 1 = S1, 2 = S2, 3 = S3, 4 = S4, 5 = SW
-    uint8_t _queue[4];
+    uint8_t _queue[4] = {};
     int _queueLength{0};
     int _lastS{0};
 

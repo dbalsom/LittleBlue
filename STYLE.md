@@ -5,17 +5,42 @@
 This file documents the naming and small-formatting conventions the project should follow. 
 It is intentionally concise, consistency is enforced with tooling (.clang-tidy / clang-format).
 
+## C++ Standard Version
+ 
+The CPU core should stick to C++11 compatible features to make it easier to extract for use in other emulators.
+The rest of the emulator is free to use all modern C++ features, including std::format.
+
 ## Tabs
-- 4 spaces
+
+4 spaces
+
+## Brace Style
+
+K&R Brace style. Always use braces for if and for loops - no dangling statements.
+
+- Good: 
+```cpp
+    if (foo) {
+        bar();
+    }
+```
+
+- Bad:
+```cpp
+    if (foo)
+        bar();
+```
 
 ## Naming Conventions
 - Types (classes, structs, enum class): PascalCase (UpperCamelCase)
 - Free functions and methods: lowerCamelCase (camelBack)
 - Private data members: lower_snake_case_ (trailing underscore required)
-- Public data members (avoid): lower_snake_case (no trailing underscore) or PascalCase only for constants
+- Public data members (avoid): lower_snake_case (no trailing underscore)
+- Struct fields: lower_snake_case (no trailing underscore)
 - Local variables and parameters: lower_snake_case
-- Constants/macros: UPPER_SNAKE_CASE
-- Enum values (enum class): PascalCase
+- Macros/Defines: UPPER_SNAKE_CASE
+- Constants: kPascalCase
+- Enum values (enum class): PascalCase, unless an existing acronym (VGA) in which case UPPERCASE is acceptable
 - Boolean accessors: isXxx / hasXxx style (lowerCamelCase)
 
 ## Examples

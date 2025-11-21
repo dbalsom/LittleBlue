@@ -13,6 +13,8 @@ public:
         //_cpu.setConsoleLogging();
         cpu_.reset();
         cpu_.getBus()->reset();
+        cpu_.setLogInstructions(false);
+        cpu_.setOffRailsDetection(true, 20);
         // _cpu.setExtents(
         //     -4,
         //     1000,
@@ -27,6 +29,9 @@ public:
         // The CPU core's run_for takes a number of CPU cycles (ticks/3 -> CPU cycles)
         switch (cpu_.run_for(static_cast<int>(ticks / 3))) {
             case Cpu<Bus>::RunResult::BreakpointHit:
+                state_ = MachineState::BreakpointHit;
+                break;
+            case Cpu<Bus>::RunResult::OffRails:
                 state_ = MachineState::BreakpointHit;
                 break;
             default:

@@ -42,6 +42,7 @@
 #include "frontend/DisplayRenderer.h"
 #include "frontend/TestRunner.h"
 #include "frontend/keyboard.h"
+#include "gui/InstructionHistoryWindow.h"
 
 // Forward declare the callback we'll register with SDL_ShowOpenFileDialog
 static void FileDialogCallback(void* userdata, const char* const* filelist, int filter_index);
@@ -106,6 +107,7 @@ struct AppContext
     bool show_memory_viewer{false};
     bool show_vram_viewer{false};
     bool show_stack_viewer{false};
+    bool show_instruction_history{false};
     bool show_cpu_viewer{false};
     bool show_video_card_viewer{false};
     bool show_pic_viewer{false};
@@ -113,6 +115,7 @@ struct AppContext
     bool show_display_debug{false};
     bool cpu_running{true};
     bool show_disassembly{false};
+    bool display_composite{false}; // composite rendering enabled flag
 
     // CPU timing display
     uint64_t last_cycle_count{0};
@@ -385,7 +388,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
         }
     }
 
-    // Create the display texture used to show the CGA framebuffer. Use RGBA and streaming access for frequent updates.
+    // Create the display texture (full front buffer size); aperture will be applied as source rect when rendering.
     ctx->display_texture =
         SDL_CreateTexture(
             renderer,
@@ -409,6 +412,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
     ctx->dbg_manager.addWindow("Stack Viewer", std::make_unique<StackViewerWindow>(machine),
                                &ctx->show_stack_viewer);
     ctx->dbg_manager.addWindow("Cycle Log", std::make_unique<CycleLogWindow>(machine), &ctx->show_cycle_log);
+    ctx->dbg_manager.addWindow("Instruction History", std::make_unique<InstructionHistoryWindow>(machine),
+                               &ctx->show_instruction_history);
     ctx->dbg_manager.addWindow("Video Card Status", std::make_unique<VideoCardStatusWindow>(machine),
                                &ctx->show_video_card_viewer);
     ctx->dbg_manager.addWindow("PIC Status", std::make_unique<PicStatusWindow>(machine), &ctx->show_pic_viewer);
@@ -642,10 +647,19 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
             ImGui::EndMenu();
         }
 
-
         if (ImGui::BeginMenu("Machine")) {
             if (ImGui::MenuItem("Reboot")) {
                 app->resetMachine();
+            }
+            ImGui::EndMenu();
+        }
+
+        // Display menu for video output options
+        if (ImGui::BeginMenu("Display")) {
+            bool composite = app->display_composite;
+            if (ImGui::MenuItem("Composite", nullptr, &composite)) {
+                app->display_composite = composite;
+                app->display_renderer.setComposite(composite);
             }
             ImGui::EndMenu();
         }
@@ -672,8 +686,7 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 
         // Debug menu contains development and inspection tools
         if (ImGui::BeginMenu("Debug")) {
-            // Add debugger windows (managed by DebuggerManager) - this will include
-            // Memory Viewer, VRAM Viewer, Cycle Log, etc., because they've been registered.
+            // Add debugger window items managed by DebuggerManager
             app->dbg_manager.drawMenuItems();
 
             // Dump submenu for quick binary dumps of emulator state
@@ -708,45 +721,35 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
             ImGui::EndMenu();
         }
 
-        // Example: add more top-level menus later
-        // if (ImGui::BeginMenu("Edit")) { ... ImGui::EndMenu(); }
-
         ImGui::EndMainMenuBar();
     }
 
-    // --- About dialog ---
     if (app->show_about) {
-        ImGui::OpenPopup("About XTCE-Blue");
+        if (ImGui::Begin("About XTCE-Blue", &app->show_about,
+                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::Text("XTCE-Blue");
+            ImGui::Separator();
+            ImGui::Text("Version: 0.1.0");
+            ImGui::Text("Authors:");
+            ImGui::BulletText("Andrew Jenner (reenigne) - original XTCE CPU core");
+            ImGui::BulletText("Daniel Balsom (gloriouscow) - SDL3 frontend, CGA implementation");
+
+            ImGui::NewLine();
+            ImGui::TextWrapped(
+                "XTCE-Blue is a cycle-accurate IBM XT emulator written in C++ using SDL3 and ImGui. "
+                "XTCE-Blue's 8088 emulation is powered by the XTCE 8088 CPU core - "
+                "which emulates the 8088 at the microcode level.");
+
+            ImGui::NewLine();
+            if (ImGui::Button("OK", ImVec2(120, 0))) {
+                app->show_about = false;
+            }
+        }
+        ImGui::End();
     }
 
     if (app->show_demo) {
         ImGui::ShowDemoWindow();
-    }
-
-    if (ImGui::BeginPopupModal("About XTCE-Blue", &app->show_about,
-                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
-        ImGui::Text("XTCE-Blue\n");
-        ImGui::Separator();
-        ImGui::Text("Version: 0.1.0");
-        ImGui::Text("Authors:");
-        ImGui::BulletText("Andrew Jenner (reenigne) - original XTCE CPU core");
-        ImGui::BulletText("Daniel Balsom (gloriouscow) - SDL3 frontend, CGA implementation");
-
-        ImGui::NewLine();
-
-        ImGui::NewLine();
-        ImGui::TextWrapped("XTCE-Blue is a cycle-accurate IBM XT emulator written in C++ using SDL3 and ImGui. "
-            "XTCE-Blue's 8088 emulation is powered by the XTCE 8088 CPU core - "
-            "which emulates the 8088 at the microcode level.");
-
-        ImGui::NewLine();
-
-        if (ImGui::Button("OK", ImVec2(120, 0))) {
-            ImGui::CloseCurrentPopup();
-            app->show_about = false;
-        }
-
-        ImGui::EndPopup();
     }
 
     if (app->show_io_debug) {
@@ -775,38 +778,31 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
         if (auto* bus = app->machine->getBus()) {
             if (auto* cga = bus->cga()) {
                 app->display_renderer.render(cga);
-
-                // Integer rect for texture lock/update
-                SDL_Rect src_rect_i{0, 0, static_cast<int>(DisplayRenderer::WIDTH),
-                                    static_cast<int>(DisplayRenderer::HEIGHT)};
-                // Floating-point rect for rendering APIs (SDL_RenderTexture expects SDL_FRect)
-                SDL_FRect src_rect_f{0.0f, 0.0f, static_cast<float>(DisplayRenderer::WIDTH),
-                                     static_cast<float>(DisplayRenderer::HEIGHT)};
-                // Try locking the streaming texture and memcpy rows to the texture memory for reliable updates.
+                const auto aperture = cga->getDisplayAperture();
+                SDL_Rect src_rect_i{static_cast<int>(aperture.x), static_cast<int>(aperture.y),
+                                    static_cast<int>(aperture.w), static_cast<int>(aperture.h)};
+                SDL_FRect src_rect_f{static_cast<float>(src_rect_i.x), static_cast<float>(src_rect_i.y),
+                                     static_cast<float>(src_rect_i.w), static_cast<float>(src_rect_i.h)};
                 void* tex_pixels = nullptr;
                 int tex_pitch = 0;
-                if (SDL_LockTexture(app->display_texture, &src_rect_i, &tex_pixels, &tex_pitch) && (tex_pixels !=
-                    nullptr)) {
+                const int full_w = DisplayRenderer::WIDTH;
+                const int full_h = DisplayRenderer::HEIGHT;
+                const int row_bytes = full_w * DisplayRenderer::BYTES_PER_PIXEL;
+                if (SDL_LockTexture(app->display_texture, nullptr, &tex_pixels, &tex_pitch) && tex_pixels) {
                     const uint8_t* src = app->display_renderer.pixels();
-                    constexpr int row_bytes = DisplayRenderer::WIDTH * DisplayRenderer::BYTES_PER_PIXEL;
-                    //SDL_Log("SDL_LockTexture succeeded: pitch=%d, rowBytes=%d", tex_pitch, row_bytes);
-                    for (int y = 0; y < DisplayRenderer::HEIGHT; ++y) {
-                        uint8_t* dstRow = static_cast<uint8_t*>(tex_pixels) + static_cast<size_t>(y) * tex_pitch;
+                    for (int y = 0; y < full_h; ++y) {
+                        auto* dstRow = static_cast<uint8_t*>(tex_pixels) + static_cast<size_t>(y) * tex_pitch;
                         const uint8_t* srcRow = src + static_cast<size_t>(y) * row_bytes;
                         memcpy(dstRow, srcRow, row_bytes);
                     }
                     SDL_UnlockTexture(app->display_texture);
-                    //SDL_Log("Texture updated via Lock/Unlock");
                 }
                 else {
-                    // Fallback to SDL_UpdateTexture if lock failed
-                    constexpr int pitch = DisplayRenderer::WIDTH * DisplayRenderer::BYTES_PER_PIXEL;
-                    if (!SDL_UpdateTexture(app->display_texture, &src_rect_i, app->display_renderer.pixels(),
-                                           pitch)) {
+                    const int pitch = full_w * DisplayRenderer::BYTES_PER_PIXEL;
+                    if (!SDL_UpdateTexture(app->display_texture, nullptr, app->display_renderer.pixels(), pitch)) {
                         SDL_Log("SDL_UpdateTexture failed: %s", SDL_GetError());
                     }
                 }
-                // Render the texture stretched to the window viewport
                 SDL_Rect dst;
                 int ww, wh;
                 SDL_GetWindowSize(app->window, &ww, &wh);
@@ -814,14 +810,11 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
                 dst.y = 0;
                 dst.w = ww;
                 dst.h = wh;
-                // Convert dst to floating rect for rendering
                 SDL_FRect dstF{0.0f, 0.0f, static_cast<float>(ww), static_cast<float>(wh)};
                 if (!SDL_RenderTexture(app->renderer, app->display_texture, &src_rect_f, &dstF)) {
                     SDL_Log("SDL_RenderTexture failed: %s", SDL_GetError());
-                    // Fallback: Draw a magenta rectangle so user sees something obvious instead of a black screen
                     SDL_SetRenderDrawColor(app->renderer, 0xFF, 0x00, 0xFF, 0xFF);
                     SDL_RenderFillRect(app->renderer, &dstF);
-                    // Restore draw color for ImGui
                     SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
                 }
             }

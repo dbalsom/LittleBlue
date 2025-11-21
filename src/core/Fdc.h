@@ -252,7 +252,7 @@ public:
     void dmaDeviceEOP() {
 
         if (bytes_left_ > 0) {
-            std::cerr << std::format("FDC: DMA EOP signaled but {} bytes still left in operation!\n", bytes_left_);
+            std::cout << std::format("FDC: DMA EOP signaled but {} bytes still left in operation!\n", bytes_left_);
         }
 
         // Complete immediately if we're mid-op

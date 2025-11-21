@@ -20,3 +20,13 @@ inline std::string decimal(int n, int w = 0) {
 }
 
 using PcSpeakerCallback = std::function<void(uint64_t tick, bool state, bool enabled)>;
+
+struct DisplayAperture
+{
+    uint32_t fw; // Field width
+    uint32_t fh; // Field height
+    uint32_t w; // Aperture width
+    uint32_t h; // Aperture height
+    uint32_t x; // Aperture x-offset
+    uint32_t y; // Aperture y-offset
+};

@@ -24,7 +24,9 @@ endif()
 # Set the name of the executable
 set(EXECUTABLE_NAME ${PROJECT_NAME})
 
-add_executable(${EXECUTABLE_NAME})
+add_executable(${EXECUTABLE_NAME}
+        src/core/cpu_types.h
+        src/frontend/Composite.h)
 
 target_include_directories(${EXECUTABLE_NAME}
     PRIVATE
@@ -71,6 +73,8 @@ target_sources(${EXECUTABLE_NAME}
         src/gui/PicStatusWindow.cpp
         src/gui/DmacStatusWindow.cpp
         src/gui/DisplayDebugWindow.cpp
+        src/gui/InstructionHistoryWindow.h
+        src/gui/InstructionHistoryWindow.cpp
         src/third_party/blip_buffer/blip_buffer.cpp
         src/frontend/TestRunner.cpp
 )

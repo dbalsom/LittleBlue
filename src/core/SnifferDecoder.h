@@ -3,7 +3,10 @@
 
 #include <format>
 
+#include "cpu_types.h"
 #include "Disassembler.h"
+
+enum class QueueReadState;
 
 class SnifferDecoder
 {
@@ -30,8 +33,8 @@ public:
         _queueLength = 0;
         _lastS = 0;
         _cpu_status = 7;
-        _cpu_qs = 0;
-        _cpu_next_qs = 0;
+        _cpu_qs = QueueReadState::NoOperation;
+        _cpu_next_qs = QueueReadState::NoOperation;
 
         _disassembly = "";
         _disassembler.reset();
@@ -98,7 +101,7 @@ public:
                 break;
         }
 
-        line += " " + std::string(1, qsc[_cpu_qs]) + sc[_cpu_status]
+        line += " " + std::string(1, qsc[static_cast<int>(_cpu_qs)]) + sc[_cpu_status]
             + (_cpu_rqgt0 ? "G" : ".") + (_cpu_ready ? "." : "z")
             + (_cpu_test ? "T" : ".") + (_cpu_lock ? "L" : ".")
             + "  ";
@@ -242,8 +245,8 @@ public:
         line += "] ";
 
         // Emit instruction if applicable
-        if (_cpu_qs != 0) {
-            if (_cpu_qs == 2) {
+        if (_cpu_qs != QueueReadState::NoOperation) {
+            if (_cpu_qs == QueueReadState::Flush) {
                 // Queue flushed, reset queueLength.
                 _queueLength = 0;
             }
@@ -259,7 +262,7 @@ public:
                     line += "!g";
                     _queueLength = 0;
                 }
-                if (!_disassembler.disassemble(b, _cpu_qs == 1, _disassembly)) {
+                if (!_disassembler.disassemble(b, _cpu_qs == QueueReadState::FirstByte, _disassembly)) {
                     _disassembly = "";
                 }
             }
@@ -315,12 +318,16 @@ public:
             }
             line += " ";
         }
-        else
+        else {
             line += "                  ";
-        if (_cpu_qs != 0)
-            line += std::string(1, qsc[_cpu_qs]);
-        else
+        }
+
+        if (_cpu_qs != QueueReadState::NoOperation) {
+            line += std::string(1, qsc[static_cast<int>(_cpu_qs)]);
+        }
+        else {
             line += " ";
+        }
         line += " " + _disassembly;
         _lastS = _cpu_status;
         _t = _tNext;
@@ -334,11 +341,11 @@ public:
         // the queue status lines indicate queue activity that has occurred in
         // the previous clock cycle".
         _cpu_qs = _cpu_next_qs;
-        _cpu_next_qs = 0;
+        _cpu_next_qs = QueueReadState::NoOperation;
         return line;
     }
 
-    void queueOperation(const int qs) { _cpu_next_qs = qs; }
+    void queueOperation(const QueueReadState qs) { _cpu_next_qs = qs; }
 
     void setStatus(const int s) {
         _cpu_last_status = _cpu_status;
@@ -449,8 +456,8 @@ private:
     uint32_t _cpu_address = 0;
     // QS0           O QUEUE STATUS: provide status to allow external tracking of the internal 8088 instruction queue. The queue status is valid during the CLK cycle after which the queue operation is performed.
     // QS1           0 = No operation, 1 = First Byte of Opcode from Queue, 2 = Empty the Queue, 3 = Subsequent Byte from Queue
-    uint8_t _cpu_qs = 0;
-    uint8_t _cpu_next_qs = 0;
+    QueueReadState _cpu_qs = QueueReadState::NoOperation;
+    QueueReadState _cpu_next_qs = QueueReadState::NoOperation;
     // -S0           O STATUS: is active during clock high of T4, T1, and T2, and is returned to the passive state (1,1,1) during T3 or during Tw when READY is HIGH. This status is used by the 8288 bus controller to generate all memory and I/O access control signals. Any change by S2, S1, or S0 during T4 is used to indicate the beginning of a bus cycle, and the return to the passive state in T3 and Tw is used to indicate the end of a bus cycle. These signals float to 3-state OFF during ``hold acknowledge''. During the first clock cycle after RESET becomes active, these signals are active HIGH. After this first clock, they float to 3-state OFF.
     // -S1           0 = Interrupt Acknowledge, 1 = Read I/O Port, 2 = Write I/O Port, 3 = Halt, 4 = Code Access, 5 = Read Memory, 6 = Write Memory, 7 = Passive
     // -S2

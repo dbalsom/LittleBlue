@@ -13,53 +13,16 @@
 #include "SnifferDecoder.h"
 
 #include "microcode.h"
+#include "cpu_types.h"
 
 #define LINE_ENDING_SIZE 1
-#define DEBUG_MC 0
-
-enum class Register : size_t
-{
-    ES,
-    CS,
-    SS,
-    DS,
-    PC,
-    IND,
-    OPR,
-    R7,
-    R8,
-    R9,
-    R10,
-    R11,
-    TMPA,
-    TMPB,
-    TMPC,
-    FLAGS,
-    R16,
-    R17,
-    M,
-    R,
-    SIGMA,
-    ONES,
-    R22,
-    R23,
-    AX,
-    CX,
-    DX,
-    BX,
-    SP,
-    BP,
-    SI,
-    DI,
-};
-
-constexpr size_t reg_to_idx(Register r) {
-    return static_cast<size_t>(r);
-}
+#define DEBUG_MC 1
 
 template <typename BusType = Bus, typename WordT = uint8_t, std::size_t QueueLen = 4>
 class Cpu
 {
+
+    static constexpr int OFF_RAILS_CT = 20;
     static_assert(
         std::is_same<WordT, uint8_t>::value ||
         std::is_same<WordT, uint16_t>::value,
@@ -101,7 +64,7 @@ class Cpu
     };
 
 public:
-    enum class RunResult { Ok, Halt, BreakpointHit };
+    enum class RunResult { Ok, Halt, BreakpointHit, OffRails };
 
     enum MicrocodeState
     {
@@ -127,6 +90,13 @@ public:
     {
         uint8_t data; // fetched byte
         uint16_t address; // ind at which byte was fetched
+    };
+
+    struct InstructionHistoryEntry
+    {
+        uint16_t cs;
+        uint16_t ip;
+        std::string disassembly;
     };
 
     // Default constructor: default-construct the bus and initialize CPU state
@@ -158,11 +128,26 @@ public:
         _stopSeg = stopSeg;
     }
 
+    void setLogInstructions(const bool state) {
+        _log_instructions = state;
+    }
+
+    bool isLogInstructions() const { return _log_instructions; }
+
+    void setOffRailsDetection(const bool state, int badOpcodeCt = OFF_RAILS_CT) {
+        _off_rails_detection = state;
+        _bad_opcode_ct = badOpcodeCt;
+    }
+
+    std::vector<InstructionHistoryEntry> getHistory(size_t lines) {
+        return _history.getLast(lines);
+    }
+
     uint16_t getInstructionPointer() const {
         return _inst_address;
     }
 
-    void setInitialIP(int v) { pc() = v; }
+    void setInitialIP(const int v) { pc() = v; }
     uint64_t cycle() const { return _cycle >= 11 ? _cycle - 11 : 0; }
 
     std::string log() const {
@@ -204,6 +189,7 @@ public:
         _repne = false;
         _lock = false;
         _loaderState = 0;
+        _read_prefix = false;
         _lastMicrocodePointer = -1;
         _dequeueing = false;
         _ioCancelling = 0;
@@ -228,6 +214,13 @@ public:
         _sign = false;
         _parity = false;
         _overflow = false;
+
+        // Instruction tracking
+        _inst_address = 0;
+        _history.clear();
+
+        _bad_opcode_ct = 0;
+        _off_rails = false;
     }
 
     RunResult run_for(const int cycleCt) {
@@ -236,6 +229,7 @@ public:
         sanity_check();
         // Clear the breakpoint status if we're being asked to run again
         _breakpointHit = false;
+        _off_rails = false;
 
         for (int i = 0; i < cycleCt; i++) {
             simulateCycle();
@@ -255,6 +249,10 @@ public:
             if (_breakpointHit) {
                 // Stop executing further cycles if a breakpoint was hit by other means
                 return RunResult::BreakpointHit;
+            }
+
+            if (_off_rails) {
+                return RunResult::OffRails;
             }
         }
 
@@ -361,7 +359,7 @@ private:
     // Extracted common initialization logic so we can reuse it in all constructors.
     void initializeCommon() {
         _logStartCycle = 0;
-        _logEndCycle = 100;
+        _logEndCycle = UINT64_MAX;
 
         setBytePointers();
 
@@ -676,13 +674,22 @@ private:
         }
     }
 
-    uint8_t queueRead() {
+    uint8_t queueRead(const QueueReadState qs) {
         const uint8_t q1 = _queue & 0xff;
         uint8_t q2 = 0;
         _newQueue.pop(q2);
+        if (_log_instructions) {
+            if (_disassembler.disassemble(q2, qs == QueueReadState::FirstByte, _disassembly)) {
+                InstructionHistoryEntry ihe;
+                ihe.cs = cs();
+                ihe.ip = _inst_address;
+                ihe.disassembly = _disassembly;
+                _history.push(ihe);
+            }
+        }
         assert(q1 == q2);
         _dequeueing = true;
-        _snifferDecoder.queueOperation(3);
+        _snifferDecoder.queueOperation(qs);
         return q1;
     }
 
@@ -793,7 +800,18 @@ private:
                 _bus.setLock(false);
             }
         }
-        _opcode = _nextMicrocodePointer >> 4;
+        const auto new_opcode = _nextMicrocodePointer >> 4;
+
+        if ((new_opcode == 0 && _opcode == 0) || (new_opcode == 0xFF && _opcode == 0xFF)) {
+            ++_bad_opcode_ct;
+            if (_off_rails_detection && (_bad_opcode_ct >= _bad_opcode_max)) {
+                _off_rails = true;
+            }
+        }
+        else if (new_opcode != 0) {
+            _bad_opcode_ct = 0;
+        }
+        _opcode = new_opcode;
         _group = _nextGroup;
     }
 
@@ -825,6 +843,7 @@ private:
 
     void startMicrocodeInstruction() {
         _loaderState = 2;
+        _read_prefix = false;
         startInstruction();
         _microcodePointer = _nextMicrocodePointer;
         _wordSize = true;
@@ -877,9 +896,14 @@ private:
     void startNonMicrocodeInstruction() {
         _loaderState = 0;
         startInstruction();
+
+        // Handle prefixes
+        _read_prefix = false;
+
         // LOCK prefix
         if ((_group & groupLOCK) != 0) {
             _locking = true;
+            _read_prefix = true;
             return;
         }
         // REP prefix
@@ -891,8 +915,15 @@ private:
             // when a REP prefix is used with MUL/DIV!
             _f1 = true;
             _repne = !lowBit(_opcode);
+            _read_prefix = true;
             return;
         }
+        if ((_group & groupSegmentOverride) != 0) {
+            _segmentOverride = (_opcode >> 3) & 3;
+            _read_prefix = true;
+        }
+
+        // Handle 1BL instructions
         if ((_group & groupHLT) != 0) {
             _loaderState = 2;
             _rni = false;
@@ -927,9 +958,7 @@ private:
             }
             return;
         }
-        if ((_group & groupSegmentOverride) != 0) {
-            _segmentOverride = (_opcode >> 3) & 3;
-        }
+
     }
 
     uint16_t doRotate(uint16_t v, uint16_t a, bool carry) {
@@ -1114,7 +1143,7 @@ private:
                     _state = stateWaitingForQueueData;
                     return 0;
                 }
-                return queueRead();
+                return queueRead(QueueReadState::SubsequentByte);
             case 8: // A (AL)
             case 9: // C (CL)? - not used
             case 10: // E (DL)? - not used
@@ -1344,7 +1373,7 @@ private:
                         _queueBytes = 0;
                         _queue = 0;
                         _newQueue.clear();
-                        _snifferDecoder.queueOperation(2);
+                        _snifferDecoder.queueOperation(QueueReadState::Flush);
                         _queueFlushing = true;
                         break;
                     case 2: // CF1
@@ -1511,15 +1540,17 @@ private:
                 break;
 
             case stateWaitingUntilFirstByteCanStart:
+            {
                 if (_ioType != ioPassive) {
                     // Bus is busy
                     break;
                 }
                 _ioWriteData = opr() & 0xff;
                 _ioSegment = (_operands >> 2) & 3;
+                auto base_segment = ((_group & groupEffectiveAddress) != 0) ? _segment : _ioSegment;
                 if (_ioSegment == 3) {
-                    // Use the segment override if present
-                    _ioSegment = _segmentOverride != -1 ? _segmentOverride : _segment;
+                    // If segment is DS, use the segment override if present
+                    _ioSegment = (_segmentOverride != -1) ? _segmentOverride : base_segment;
                 }
                 else {
                     // This is a no-segment access (IVT read or I/O).
@@ -1535,7 +1566,7 @@ private:
                 _state = stateWaitingUntilFirstByteDone;
                 busStart();
                 break;
-
+            }
             case stateWaitingUntilFirstByteDone:
                 if (!_wordSize) {
                     // 8-bit access, disable BIU request flag as we will complete this bus cycle.
@@ -1632,21 +1663,26 @@ private:
     // The 8088 processes interrupts, traps and NMI at this point, so any of these states will prevent normal opcode
     // fetching.
     void readOpcode(const int nextState) {
-        // Priority of servicing is NMI, interrupt, trap flag.
-        // See https://www.righto.com/2023/02/8086-interrupt.html
-        if (_nmiRequested) {
-            _nmiRequested = false;
-            setNextMicrocode(nextState, 0x1001);
-            return;
-        }
-        if (interruptPending()) {
-            setNextMicrocode(nextState, 0x1002);
-            return;
-        }
-        if ((flags() & 0x100) != 0) {
-            // Trap flag is set.
-            setNextMicrocode(nextState, 0x1000);
-            return;
+
+        // Don't service interrupts after prefixes.
+        if (!_read_prefix) {
+
+            // Priority of servicing is NMI, interrupt, trap flag.
+            // See https://www.righto.com/2023/02/8086-interrupt.html
+            if (_nmiRequested) {
+                _nmiRequested = false;
+                setNextMicrocode(nextState, 0x1001);
+                return;
+            }
+            if (interruptPending()) {
+                setNextMicrocode(nextState, 0x1002);
+                return;
+            }
+            if ((flags() & 0x100) != 0) {
+                // Trap flag is set.
+                setNextMicrocode(nextState, 0x1000);
+                return;
+            }
         }
 
         // No interrupt conditions, so load the next opcode byte from the prefetch queue.
@@ -1659,8 +1695,8 @@ private:
             QueueEntry qe = {};
             _newQueue.peekEntry(qe);
             _inst_address = qe.address;
-            setNextMicrocode(nextState, queueRead() << 4);
-            _snifferDecoder.queueOperation(1);
+            setNextMicrocode(nextState, queueRead(QueueReadState::FirstByte) << 4);
+            _snifferDecoder.queueOperation(QueueReadState::FirstByte);
             return;
         }
         _loaderState = nextState & 2;
@@ -1817,7 +1853,7 @@ private:
                         _loaderState = 1;
                         if (_queueBytes != 0) {
                             // SC
-                            _nextModRM = queueRead();
+                            _nextModRM = queueRead(QueueReadState::SubsequentByte);
                             startMicrocodeInstruction();
                         }
                     }
@@ -2428,7 +2464,7 @@ private:
     std::string _log;
     // Ring buffer of recent log lines for cycle logging
     std::deque<std::string> _logBuffer;
-    size_t _logCapacity = 10000; // default capacity (lines)
+    size_t _logCapacity = 1000; // default capacity (lines)
     bool _cycleLogging = false; // enabled via GUI
     BusType _bus;
 
@@ -2666,6 +2702,131 @@ private:
         }
     };
 
+
+    class InstructionHistory
+    {
+    public:
+        typedef std::size_t size_type;
+
+        InstructionHistory() :
+            head_(0)
+            , tail_(0)
+            , size_(0) {
+        }
+
+        void clear() {
+            head_ = 0;
+            tail_ = 0;
+            size_ = 0;
+        }
+
+        size_type len() const {
+            return size_;
+        }
+
+        size_type capacity() {
+            return capacity_;
+        }
+
+        bool isEmpty() const {
+            return size_ == 0;
+        }
+
+        bool full() const {
+            return head_ == tail_;
+        }
+
+        size_type freeSpace() const {
+            return QueueLen - size_;
+        }
+
+        bool hasRoom() const {
+            return freeSpace() >= sizeof(WordT);
+        }
+
+        // Push a single entry (byte + address). Returns false if full.
+        bool push(InstructionHistoryEntry entry) {
+            if (full()) {
+                pop();
+            }
+            buffer_[head_] = entry;
+            advanceHead();
+            return true;
+        }
+
+        bool pop() {
+            if (isEmpty()) {
+                return false;
+            }
+            advanceTail();
+            return true;
+        }
+
+        // Pop oldest entry. Returns false if empty.
+        bool pop(InstructionHistoryEntry& out) {
+            if (isEmpty()) {
+                return false;
+            }
+            out = buffer_[tail_];
+            advanceTail();
+            return true;
+        }
+
+        // Peek the newest entry without removing it. Returns false if empty.
+        bool peekEntry(InstructionHistoryEntry& out) const {
+            if (isEmpty()) {
+                return false;
+            }
+            out = buffer_[head_];
+            return true;
+        }
+
+        std::vector<InstructionHistoryEntry> getLast(size_t lines) const {
+            std::vector<InstructionHistoryEntry> out;
+            if (isEmpty()) {
+                return out; // nothing to return
+            }
+            // Clamp requested lines to number of valid entries
+            if (lines > size_) {
+                lines = size_;
+            }
+            out.reserve(lines);
+
+            // Start from the most recently written entry (head_ points to next write slot)
+            size_type index = (head_ == 0 ? capacity_ - 1 : head_ - 1);
+
+            for (size_t count = 0; count < lines; ++count) {
+                out.push_back(buffer_[index]);
+                // If we've reached the oldest entry, stop early.
+                if (index == tail_) {
+                    break;
+                }
+                // Move backward with wrap-around
+                index = (index == 0 ? capacity_ - 1 : index - 1);
+            }
+
+            return out;
+        }
+
+    private:
+        std::array<InstructionHistoryEntry, 1000> buffer_;
+        size_type capacity_ = 1000;
+        size_type head_; // next write
+        size_type tail_; // next read
+        size_type size_; // number of valid entries
+
+        void advanceHead() {
+            head_ = (head_ + 1) % capacity_;
+            ++size_;
+        }
+
+        void advanceTail() {
+            tail_ = (tail_ + 1) % capacity_;
+            --size_;
+        }
+    };
+
+    // Advance the microcode pointer to the next instruction. Only the low 4 bits are incremented.
     void advanceMicrocodePointer() {
         _microcodePointer =
             (_microcodePointer & 0xFFF0) | ((_microcodePointer + 1) & 0xf);
@@ -2676,7 +2837,7 @@ private:
 
     uint64_t _cycle;
     uint64_t _logStartCycle;
-    uint64_t _logEndCycle;
+    uint64_t _logEndCycle = UINT64_MAX;
     uint64_t _executeEndCycle;
     bool _consoleLogging;
 
@@ -2742,6 +2903,7 @@ private:
     bool _mIsM;
     bool _skipRNI;
     bool _useMemory;
+    bool _read_prefix{false};
     bool _wordSize;
     int _segment;
     int _lastMicrocodePointer;
@@ -2766,6 +2928,17 @@ private:
     uint16_t _breakpoint_cs = 0;
     uint16_t _breakpoint_ip = 0;
     uint32_t _testNumber = 0;
+
+    bool _log_instructions = false;
+    std::string _disassembly;
+    InstructionHistory _history;
+    Disassembler _disassembler;
+
+    // Off-rails detection
+    bool _off_rails_detection = false;
+    int _bad_opcode_max = OFF_RAILS_CT;
+    int _bad_opcode_ct = 0;
+    bool _off_rails = false;
 };
 
 #endif

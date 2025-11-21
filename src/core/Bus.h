@@ -266,7 +266,7 @@ public:
                 // Device read/write occurs on S2
                 if (dmac_.getActiveChannel() == 2) {
                     // Servicing FDC
-                    auto addr = dmac_.getAddress();
+                    auto addr = dmaAddressHigh(2) + static_cast<uint32_t>(dmac_.getAddress());
 
                     if (dmac_.isReading()) {
                         std::cout << std::format("DMAC Channel 2 READ from address {:05X}\n", addr);
@@ -279,7 +279,9 @@ public:
                     dmac_.service();
                     if (dmac_.isAtTerminalCount()) {
                         // Notify FDC that DMA operation is complete
-                        std::cout << "DMAC Channel 2 terminal count reached, notifying FDC\n";
+                        std::cout << std::format(
+                            "DMAC Channel 2 terminal count reached at address [{:05X}], page [{:02X}], notifying FDC\n",
+                            addr, dma_pages_[2]);
                         fdc_.dmaDeviceEOP();
                     }
 
@@ -338,7 +340,24 @@ public:
                     updatePPI();
                     break;
                 case 0x80:
-                    dma_pages_[address_ & 3] = data;
+                    // Don't ask me why the DMA page registers are ordered this way.
+                    switch (address_) {
+                        case 0x87:
+                            dma_pages_[0] = data;
+                            break;
+                        case 0x83:
+                            dma_pages_[1] = data;
+                            break;
+                        case 0x81:
+                            std::cout << std::format("Write to DMA page register 2: {:02X}\n", data);
+                            dma_pages_[2] = data;
+                            break;
+                        case 0x82:
+                            dma_pages_[3] = data;
+                            break;
+                        default:
+                            break;
+                    }
                     break;
                 case 0xa0:
                     nmi_enabled_ = (data & 0x80) != 0;
@@ -354,6 +373,7 @@ public:
                     break;
             }
         }
+
         else {
             // Memory write
             if (address_ < CONVENTIONAL_RAM_SIZE) {
@@ -401,6 +421,20 @@ public:
                     updatePPI();
                     return b;
                 }
+                case 0x80:
+                    switch (address_) {
+                        case 0x87:
+                            return dma_pages_[0];
+                        case 0x83:
+                            return dma_pages_[1];
+                        case 0x81:
+                            return dma_pages_[2];
+                        case 0x82:
+                            return dma_pages_[3];
+                        default:
+                            break;
+                    }
+                    break;
                 case 0x3C0:
                     return cga_.readIO(address_ & 0x0F);
                 case 0x3E0:
@@ -483,7 +517,8 @@ public:
         return cga_phase_ >> 2;
     }
 
-private:
+private
+:
     bool dmaReady() {
         if (dma_state_ == s1 || dma_state_ == s2 || dma_state_ == s3 ||
             dma_state_ == sWait || dma_state_ == s4 || dma_state_ == sDelayedT1 ||
@@ -546,9 +581,9 @@ private:
 
     }
 
-    uint32_t dmaAddressHigh(int channel) {
-        static const int pageRegister[4] = {0x83, 0x83, 0x81, 0x82};
-        return dma_pages_[pageRegister[channel]] << 16;
+    uint32_t dmaAddressHigh(const int channel) {
+        //static const int pageRegister[4] = {0x83, 0x83, 0x81, 0x82};
+        return static_cast<uint32_t>(dma_pages_[channel & 3]) << 16;
     }
 
     enum DMAState

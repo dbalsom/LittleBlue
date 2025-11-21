@@ -70,7 +70,7 @@ bool is_deferred_mode_change(uint8_t mode_byte) {
 }
 
 void CGA::writeModeRegister(uint8_t mode_byte) {
-    std::cout << std::format("Write to CGA mode register: {:02X}", mode_byte) << std::endl;
+    //std::cout << std::format("Write to CGA mode register: {:02X}", mode_byte) << std::endl;
     if (is_deferred_mode_change(mode_byte)) {
         // Latch the mode change and mark it pending. We will change the mode on next hsync.
         mode_pending_ = true;

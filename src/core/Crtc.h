@@ -56,8 +56,8 @@ public:
         bool vsync = false; // one-tick pulse when VSYNC occurs
     };
 
-    static constexpr uint8_t CURSOR_LINE_MASK = 0b0000'1111;
-    static constexpr uint8_t CURSOR_ATTR_MASK = 0b0011'0000;
+    static constexpr uint8_t CURSOR_LINE_MASK = 0b0001'1111;
+    static constexpr uint8_t CURSOR_ATTR_MASK = 0b0110'0000;
 
     static constexpr uint8_t BLINK_FAST_RATE = 8;
     static constexpr uint8_t BLINK_SLOW_RATE = 16;
@@ -170,7 +170,8 @@ private:
     uint8_t hsc_c3l_ = 0; // Horizontal sync counter (counts in hblank)
     uint8_t vtac_c5_ = 0; // Vertical total adjust counter
     bool in_vta_ = false;
-
+    bool last_line_ = false;
+    bool last_row_ = false;
     uint16_t vma_ = 0; // current video memory address
     uint16_t vma_t_ = 0; // temporary holding VMA' for next row start
 

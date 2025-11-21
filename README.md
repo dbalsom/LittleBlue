@@ -16,7 +16,8 @@ With reenigne's blessing I aimed to take XTCE and make a fully fleshed out demon
 
 XTCE-Blue integrates several device implementations ported from [MartyPC](https://github.com/dbalsom/martypc), including its precise, overscan-aware CGA emulation.
 
-![screenshot_01](/images/screenshot_01.png)
+![8088mph_01](/images/8088mph_01.png)
+![area5150_01](/images/area5150_01.png)
 
 ## Goals
  - Create a clean, well-commented C++ reference emulator for cycle-accurate emulation of the IBM PC/XT.
@@ -61,6 +62,12 @@ What it is currently lacking:
  - Serial Port(s)
  - Parallel Ports(s)
  - Game Port
+
+## Known issues
+  
+ - Keyboard jankiness 
+ - Slowdowns in 8088MPH and Area 5150 under heavy IO activity
+ - Microsoft Flight Simulator 1.0 fails to load
 
 # Thanks to
 

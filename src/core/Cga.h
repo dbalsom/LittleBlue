@@ -5,6 +5,7 @@
 
 #include "Crtc.h"
 #include "font.h"
+#include "src/xtce_blue.h"
 
 #define VRAM_SIZE 0x4000
 #define CGA_APERTURE_MASK 0x3FFF
@@ -166,8 +167,48 @@ static constexpr std::array<std::array<std::pair<uint64_t, uint64_t>, 256>, 6> m
     return table;
 }
 
+constexpr std::array<uint64_t, 256> make_CGA_8BIT_TABLE() {
+    std::array<uint64_t, 256> table{};
+
+    for (int glyph = 0; glyph < 256; ++glyph) {
+        uint64_t glyph_u64 = 0;
+
+        for (int bit = 0; bit < 8; ++bit) {
+            const bool bit_val = (glyph & (0x01 << (7 - bit))) != 0;
+
+            glyph_u64 |= (bit_val ? 0xFFull : 0x00ull) << (bit * 8);
+        }
+
+        table[glyph] = glyph_u64;
+    }
+
+    return table;
+}
+
+constexpr auto CGA_8BIT_TABLE = make_CGA_8BIT_TABLE();
+
+constexpr std::array<std::array<uint64_t, 256>, 16> makeCgaHiresGraphicsTable() {
+    std::array<std::array<uint64_t, 256>, 16> table{};
+
+    for (int color = 0; color < 16; ++color) {
+        for (int glyph = 0; glyph < 256; ++glyph) {
+            table[color][glyph] = CGA_8BIT_TABLE[glyph] & CGA_COLORS_U64[color];
+        }
+    }
+
+    return table;
+}
+
+constexpr auto CGA_HIRES_GFX_TABLE = makeCgaHiresGraphicsTable();
+
 class CGA
 {
+
+    static constexpr uint32_t CGA_APERTURE_W = 704;
+    static constexpr uint32_t CGA_APERTURE_H = 224;
+    static constexpr uint32_t CGA_APERTURE_X = 80;
+    static constexpr uint32_t CGA_APERTURE_Y = 10;
+
     static constexpr size_t CGA_CURSOR_MAX = 32;
 
     static constexpr uint32_t CGA_DEFAULT_CURSOR_FRAME_CYCLE = 8;
@@ -279,6 +320,17 @@ public:
         return vram_;
     }
 
+    static DisplayAperture getDisplayAperture() {
+        return DisplayAperture{
+            .fw = CGA_XRES_MAX,
+            .fh = CGA_YRES_MAX,
+            .w = CGA_APERTURE_W,
+            .h = CGA_APERTURE_H,
+            .x = CGA_APERTURE_X,
+            .y = CGA_APERTURE_Y
+        };
+    }
+
     [[nodiscard]] size_t getMemSize() const {
         return sizeof(vram_);
     }
@@ -306,6 +358,8 @@ public:
     [[nodiscard]] uint8_t readStatusRegister() const;
     void writeModeRegister(uint8_t data);
     void writeColorControlRegister(uint8_t data);
+    uint8_t getModeByte() const { return mode_byte_; }
+    uint8_t getOverscanColor() const { return cc_overscan_color_; }
 
     void clearLPLatch() {
         lp_latch_ = false;
@@ -328,7 +382,15 @@ public:
 
             // Provide an HBlankCallback that returns the required value (5).
             // crtc_.tick expects a std::function<uint8_t(void)>.
-            auto [status, vma] = crtc_.tick([]() -> uint8_t { return static_cast<uint8_t>(5); });
+            auto [status, vma] = crtc_.tick([this]() -> uint8_t
+            {
+                if (clock_divisor_ == 1) {
+                    return 10;
+                }
+                else {
+                    return 5;
+                }
+            });
             vma_ = vma;
             if (status->vsync) {
                 //std::cout << "CGA: VSYNC asserted at beamX=" << beamX_ << " beamY=" << beamY_ << "\n";
@@ -478,14 +540,14 @@ private:
                     draw_text_mode_lchar();
                 }
                 else if (mode_hires_gfx_) {
-                    //draw_hires_gfx_mode_char();
+                    draw_hires_gfx_mode_char();
                 }
                 else {
                     draw_lowres_gfx_mode_char();
                 }
             }
             else {
-                draw_solid_lchar(7);
+                draw_solid_lchar(cc_overscan_color_);
             }
 
             // Update position to next pixel and character column.
@@ -521,7 +583,7 @@ private:
                 }
             }
             else {
-                draw_solid_hchar(7);
+                draw_solid_hchar(cc_overscan_color_);
             }
 
             // Update position to next pixel and character column.
@@ -658,6 +720,23 @@ private:
         }
     }
 
+    /// Draw a single character column in high resolution graphics mode (640x200)
+    void draw_hires_gfx_mode_char() {
+        auto base_addr = get_gfx_addr(crtc_.vlc());
+        const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[back_buf_]);
+
+        if (mode_enable_) {
+            auto byte0 = vram_[base_addr];
+            auto byte1 = vram_[base_addr + 1];
+
+            frame_u64[rba_ >> 3] = CGA_HIRES_GFX_TABLE[cc_alt_color_][byte0];
+            frame_u64[(rba_ >> 3) + 1] = CGA_HIRES_GFX_TABLE[cc_alt_color_][byte1];
+        }
+        else {
+            frame_u64[rba_ >> 3] = 0;
+            frame_u64[(rba_ >> 3) + 1] = 0;
+        }
+    }
 
     void fetch_char() {
         // Address from CRTC is masked by 0x1FFF by the CGA card (bit 13 ignored) and doubled.

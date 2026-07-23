@@ -41,6 +41,8 @@ public:
     FDC* fdc() { return &fdc_; }
     DMAC* dmac() { return &dmac_; }
 
+    void enqueueScanCode(const uint8_t scancode) { kb_.enqueueScanCode(scancode); }
+
     // Read a byte from a physical address without changing bus state.
     // This allows tools (disassembler/UI) to inspect memory (RAM or ROM) directly.
     [[nodiscard]] uint8_t peek(const uint32_t address) const {
@@ -189,7 +191,7 @@ public:
             // Tick the keyboard. The keyboard needs to be ticked to produce reset bytes after a delay when reset,
             // and to produce type-matic repeat keys.
             kb_.tick();
-            if (uint8_t b = 0; kb_.getScanCode(b)) {
+            if (uint8_t b = 0; ppi_.getB(6) && (pic_.getIRQLines() & 0x02) == 0 && kb_.getScanCode(b)) {
                 // Keyboard-originated scancode (reset byte or type-matic key)
                 std::cout << std::format("Keyboard generated scancode: {:02X}", b) << std::endl;
                 for (int i = 0; i < 8; ++i) {

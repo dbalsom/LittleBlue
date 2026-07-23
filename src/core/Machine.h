@@ -126,20 +126,7 @@ public:
     }
 
     void sendScanCode(uint8_t scancode) {
-        const auto ppi = cpu_.getBus()->ppi();
-
-        // PB6 LOW output disables the clock line to the keyboard, so only read in a keyboard byte if it is high.
-        if (!ppi->getB(6)) {
-            return;
-        }
-
-        for (int i = 0; i < 8; ++i) {
-            const bool bit = (scancode & (1 << i)) != 0;
-            ppi->setA(i, bit);
-        }
-
-        // Request a keyboard interrupt.
-        cpu_.getBus()->pic()->setIRQLine(1, true);
+        cpu_.getBus()->enqueueScanCode(scancode);
     }
 
 private:

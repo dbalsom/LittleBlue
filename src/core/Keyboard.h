@@ -2,6 +2,7 @@
 #define SDL_MIN_KEYBOARD_H
 
 #include <cstdint>
+#include <deque>
 #include <format>
 #include <iostream>
 
@@ -43,6 +44,13 @@ public:
         resetting_ = false;
         clock_line_low_ticks_ = 0;
         clock_line_high_ticks_ = 0;
+        scan_codes_.clear();
+    }
+
+    void enqueueScanCode(const uint8_t byte) {
+        if (byte != 0) {
+            scan_codes_.push_back(byte);
+        }
     }
 
     void tick() {
@@ -66,6 +74,11 @@ public:
             send_reset_ = false;
             return true;
         }
+        if (!scan_codes_.empty()) {
+            byte = scan_codes_.front();
+            scan_codes_.pop_front();
+            return true;
+        }
         return false;
     }
 
@@ -75,6 +88,7 @@ private:
     bool resetting_{false};
     uint32_t clock_line_low_ticks_{0};
     uint32_t clock_line_high_ticks_{0};
+    std::deque<uint8_t> scan_codes_;
 };
 
 

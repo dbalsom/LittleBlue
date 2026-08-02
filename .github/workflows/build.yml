@@ -12,18 +12,18 @@ jobs:
               target: [Windows]
 
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
             with:
                 submodules: recursive
           - name: Configure
             run: cmake -DCMAKE_SYSTEM_NAME=${{ matrix.target }} -DCMAKE_SYSTEM_VERSION="10.0" -A${{ matrix.arch }} -S . -B build
           - name: Build
-            run: cmake --build build --target sdl-min --config Release
+            run: cmake --build build --target xtce-blue --config Release
           - name: Upload Build
             uses: actions/upload-artifact@v4
             if: ${{ matrix.target != 'WindowsStore' }}
             with: 
-                name: sdl-min-${{ matrix.target }}-${{ matrix.arch }}
+                name: xtce-blue-${{ matrix.target }}-${{ matrix.arch }}
                 path: |
                     build/Release/*.exe
                     build/Release/*.dll
@@ -35,7 +35,7 @@ jobs:
         name: Build for Linux
         runs-on: ubuntu-latest
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
             with:
                 submodules: recursive
           - name: Install Dependencies
@@ -43,28 +43,24 @@ jobs:
           - name: Configure
             run: cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -S . -B build
           - name: Build
-            run: cmake --build build --target sdl-min --config Release
+            run: cmake --build build --target xtce-blue --config Release
           - name: Upload Build
             uses: actions/upload-artifact@v4
             with: 
-                name: sdl-min-Linux
+                name: xtce-blue-Linux
                 path: |
-                    build/Release/sdl-min
+                    build/Release/xtce-blue
                     build/Release/*.so
                     build/Release/*.ttf
                     build/Release/*.ogg
                     build/Release/*.svg
 
     build-mac:
-        name: Build for Apple
+        name: Build for macOS
         runs-on: macos-14
-        strategy:
-          fail-fast: false
-          matrix:
-              target: [iOS, tvOS, visionOS, '']
 
         steps:
-          - uses: actions/checkout@v4
+          - uses: actions/checkout@v6
             with:
                 submodules: recursive
           - name: Setup Xcode version
@@ -72,16 +68,16 @@ jobs:
             with:
                 xcode-version: "16.1"
           - name: Configure
-            run: cmake -G "Xcode" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO -DCMAKE_SYSTEM_NAME=${{ matrix.target }} -DSDL_STATIC=ON -DSDL_SHARED=OFF -S . -B build
+            run: cmake -G "Xcode" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO -DSDL_STATIC=ON -DSDL_SHARED=OFF -S . -B build
           - name: Build
             run: cmake --build build --target install --config Release
 
           - name: Create DMG
             run: | 
                 cd build
-                hdiutil create -size 2g -srcfolder release -volname sdl_min_apple_${{ matrix.target }} sdl_min_apple_${{ matrix.target }}.dmg
+                hdiutil create -size 2g -srcfolder release -volname xtce_blue_macos xtce_blue_macos.dmg
           - name: Upload Build
             uses: actions/upload-artifact@v4
             with: 
-                name: sdl-min-apple-${{ matrix.target }}
+                name: xtce-blue-macos
                 path: build/*.dmg

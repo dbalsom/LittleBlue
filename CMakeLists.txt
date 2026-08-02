@@ -17,7 +17,8 @@ endif()
 
 if(MSVC)
     if(NOT CMAKE_GENERATOR STREQUAL "Ninja")
-        add_definitions(/MP)				# parallelize each target, unless Ninja is the generator
+        add_compile_options(/MP)				# parallelize each target, unless Ninja is the generator
+        add_compile_options(/std:c++latest)
     endif()
 endif()
 
@@ -107,7 +108,7 @@ endmacro()
 add_subdirectory_quiet(SDL EXCLUDE_FROM_ALL)
 
 # Add ImGui
-add_library(imgui
+add_library(imgui STATIC
         imgui/imgui.cpp
         imgui/imgui_draw.cpp
         imgui/imgui_tables.cpp

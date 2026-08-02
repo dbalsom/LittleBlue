@@ -118,6 +118,8 @@ add_library(imgui STATIC
         imgui/backends/imgui_impl_sdlrenderer3.cpp
 )
 
+target_compile_features(imgui PRIVATE cxx_std_20)
+
 target_include_directories(imgui
         PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}
                 ${CMAKE_CURRENT_SOURCE_DIR}/imgui

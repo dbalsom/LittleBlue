@@ -65,12 +65,10 @@ void CGA::writeIO(uint16_t address, uint8_t data) {
     // Placeholder for CGA I/O write logic
 }
 
-bool is_deferred_mode_change(uint8_t mode_byte) {
-    return false;
-}
+bool is_deferred_mode_change(uint8_t mode_byte) { return false; }
 
 void CGA::writeModeRegister(uint8_t mode_byte) {
-    //std::cout << std::format("Write to CGA mode register: {:02X}", mode_byte) << std::endl;
+    // std::cout << std::format("Write to CGA mode register: {:02X}", mode_byte) << std::endl;
     if (is_deferred_mode_change(mode_byte)) {
         // Latch the mode change and mark it pending. We will change the mode on next hsync.
         mode_pending_ = true;
@@ -86,8 +84,7 @@ void CGA::writeModeRegister(uint8_t mode_byte) {
 
 void CGA::updateMode() {
     // Will this mode change the character clock?
-    auto clock_changed = mode_hires_text_ != ((mode_byte_ & MODE_HIRES_TEXT) != 0);
-    if (clock_changed) {
+    if (mode_hires_text_ != ((mode_byte_ & MODE_HIRES_TEXT) != 0)) {
         // Flag the clock for pending change.  The clock can only be changed in phase with
         // LCHAR due to our dynamic clocking logic.
         std::cout << "CGA: Clock change pending";
@@ -120,6 +117,16 @@ void CGA::updateMode() {
 void CGA::writeColorControlRegister(uint8_t data) {
     cc_register_byte_ = data;
     updatePalette();
+}
+
+void CGA::updateCursorBlink() {
+    blink_ticks_++;
+    if (blink_ticks_ % CGA_CURSOR_BLINK_CYCLE == 0) {
+        cursor_blink_state_ = !cursor_blink_state_;
+    }
+    if (blink_ticks_ % CGA_TEXT_BLINK_CYCLE == 0) {
+        text_blink_state_ = !text_blink_state_;
+    }
 }
 
 void CGA::updateClock() {
@@ -181,26 +188,14 @@ uint8_t CGA::readStatusRegister() const {
     return byte;
 }
 
-uint8_t* CGA::getBackBuffer() {
-    return &buf_[back_buf_][0];
-}
+uint8_t* CGA::getBackBuffer() { return &buf_[back_buf_][0]; }
 
-size_t CGA::getBackBufferSize() const {
-    return sizeof(buf_[0]);
-}
+size_t CGA::getBackBufferSize() const { return sizeof(buf_[0]); }
 
-uint8_t* CGA::getFrontBuffer() {
-    return &buf_[front_buf_][0];
-}
+uint8_t* CGA::getFrontBuffer() { return &buf_[front_buf_][0]; }
 
-size_t CGA::getFrontBufferSize() const {
-    return sizeof(buf_[0]);
-}
+size_t CGA::getFrontBufferSize() const { return sizeof(buf_[0]); }
 
-Crtc6845* CGA::crtc() {
-    return &crtc_;
-}
+Crtc6845* CGA::crtc() { return &crtc_; }
 
-const Crtc6845* CGA::crtc() const {
-    return &crtc_;
-}
+const Crtc6845* CGA::crtc() const { return &crtc_; }

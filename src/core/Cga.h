@@ -17,6 +17,8 @@
 
 struct CgaDebugState
 {
+    uint64_t ticks;
+    uint64_t frame_count;
     uint8_t mode_byte;
     bool mode_hires_text : 1;
     bool mode_graphics : 1;
@@ -26,26 +28,13 @@ struct CgaDebugState
     bool mode_blinking : 1;
     uint8_t cc_register_byte;
     uint8_t clock_divisor;
-
 };
 
 static constexpr std::array<uint64_t, 16> CGA_COLORS_U64 = {
-    0x0000000000000000,
-    0x0101010101010101,
-    0x0202020202020202,
-    0x0303030303030303,
-    0x0404040404040404,
-    0x0505050505050505,
-    0x0606060606060606,
-    0x0707070707070707,
-    0x0808080808080808,
-    0x0909090909090909,
-    0x0A0A0A0A0A0A0A0A,
-    0x0B0B0B0B0B0B0B0B,
-    0x0C0C0C0C0C0C0C0C,
-    0x0D0D0D0D0D0D0D0D,
-    0x0E0E0E0E0E0E0E0E,
-    0x0F0F0F0F0F0F0F0F,
+    0x0000000000000000, 0x0101010101010101, 0x0202020202020202, 0x0303030303030303,
+    0x0404040404040404, 0x0505050505050505, 0x0606060606060606, 0x0707070707070707,
+    0x0808080808080808, 0x0909090909090909, 0x0A0A0A0A0A0A0A0A, 0x0B0B0B0B0B0B0B0B,
+    0x0C0C0C0C0C0C0C0C, 0x0D0D0D0D0D0D0D0D, 0x0E0E0E0E0E0E0E0E, 0x0F0F0F0F0F0F0F0F,
 };
 
 static constexpr std::array<uint64_t, 256> makeCga8BitTable() {
@@ -203,7 +192,6 @@ constexpr auto CGA_HIRES_GFX_TABLE = makeCgaHiresGraphicsTable();
 
 class CGA
 {
-
     static constexpr uint32_t CGA_APERTURE_W = 704;
     static constexpr uint32_t CGA_APERTURE_H = 224;
     static constexpr uint32_t CGA_APERTURE_X = 80;
@@ -211,7 +199,8 @@ class CGA
 
     static constexpr size_t CGA_CURSOR_MAX = 32;
 
-    static constexpr uint32_t CGA_DEFAULT_CURSOR_FRAME_CYCLE = 8;
+    static constexpr uint32_t CGA_CURSOR_BLINK_CYCLE = 8;
+    static constexpr uint32_t CGA_TEXT_BLINK_CYCLE = 16;
     static constexpr uint32_t CGA_MONITOR_VSYNC_MIN = 64;
 
     static constexpr uint32_t HCHAR_CLOCK = 8;
@@ -244,9 +233,7 @@ class CGA
     const size_t CGA_GFX_MODE_WRAP{0x3FFF};
 
 public:
-    CGA() {
-        reset();
-    }
+    CGA() { reset(); }
 
     void reset() {
         cga_phase_ = 0;
@@ -270,9 +257,11 @@ public:
         lp_latch_ = false;
         lp_switch_ = false;
 
-        cursor_blink_ = false;
-        cursor_status_ = false;
-        blink_state_ = false;
+        cursor_blinking_enabled_ = false;
+        text_blinking_enabled_ = false;
+        blink_ticks_ = 0;
+        cursor_blink_state_ = false;
+        text_blink_state_ = false;
 
         mode_byte_ = 0;
         mode_pending_ = false;
@@ -302,8 +291,10 @@ public:
         frame_count_ = 0;
     }
 
-    CgaDebugState getDebugState() const {
+    [[nodiscard]] CgaDebugState getDebugState() const {
         CgaDebugState state{};
+        state.ticks = ticks_;
+        state.frame_count = frame_count_;
         state.mode_byte = mode_byte_;
         state.mode_hires_text = mode_hires_text_;
         state.mode_graphics = mode_graphics_;
@@ -316,32 +307,22 @@ public:
         return state;
     }
 
-    uint8_t* getMem() {
-        return vram_;
-    }
+    uint8_t* getMem() { return vram_; }
 
     static DisplayAperture getDisplayAperture() {
-        return DisplayAperture{
-            .fw = CGA_XRES_MAX,
-            .fh = CGA_YRES_MAX,
-            .w = CGA_APERTURE_W,
-            .h = CGA_APERTURE_H,
-            .x = CGA_APERTURE_X,
-            .y = CGA_APERTURE_Y
-        };
+        return DisplayAperture{.fw = CGA_XRES_MAX,
+                               .fh = CGA_YRES_MAX,
+                               .w = CGA_APERTURE_W,
+                               .h = CGA_APERTURE_H,
+                               .x = CGA_APERTURE_X,
+                               .y = CGA_APERTURE_Y};
     }
 
-    [[nodiscard]] size_t getMemSize() const {
-        return sizeof(vram_);
-    }
+    [[nodiscard]] size_t getMemSize() const { return sizeof(vram_); }
 
-    [[nodiscard]] uint8_t readMem(const uint16_t address) const {
-        return vram_[address & CGA_APERTURE_MASK];
-    }
+    [[nodiscard]] uint8_t readMem(const uint16_t address) const { return vram_[address & CGA_APERTURE_MASK]; }
 
-    void writeMem(const uint16_t address, const uint8_t data) {
-        vram_[address & CGA_APERTURE_MASK] = data;
-    }
+    void writeMem(const uint16_t address, const uint8_t data) { vram_[address & CGA_APERTURE_MASK] = data; }
 
     uint8_t* getBackBuffer();
     [[nodiscard]] size_t getBackBufferSize() const;
@@ -358,21 +339,17 @@ public:
     [[nodiscard]] uint8_t readStatusRegister() const;
     void writeModeRegister(uint8_t data);
     void writeColorControlRegister(uint8_t data);
-    uint8_t getModeByte() const { return mode_byte_; }
-    uint8_t getOverscanColor() const { return cc_overscan_color_; }
+    void updateCursorBlink();
+    [[nodiscard]] uint8_t getModeByte() const { return mode_byte_; }
+    [[nodiscard]] uint8_t getOverscanColor() const { return cc_overscan_color_; }
 
-    void clearLPLatch() {
-        lp_latch_ = false;
-    }
+    void clearLPLatch() { lp_latch_ = false; }
 
-    void setLPLatch() {
-        lp_latch_ = true;
-    };
+    void setLPLatch() { lp_latch_ = true; };
 
     void tick() {
         ticks_++;
         if ((ticks_ & char_clock_mask_) == 0) {
-
             if (clock_divisor_ == 2) {
                 tick_lchar();
             }
@@ -382,19 +359,22 @@ public:
 
             // Provide an HBlankCallback that returns the required value (5).
             // crtc_.tick expects a std::function<uint8_t(void)>.
-            auto [status, vma] = crtc_.tick([this]() -> uint8_t
-            {
-                if (clock_divisor_ == 1) {
-                    return 10;
-                }
-                else {
-                    return 5;
-                }
-            });
+            auto [status, vma] = crtc_.tick(
+                [this]() -> uint8_t
+                {
+                    if (clock_divisor_ == 1) {
+                        return 10;
+                    }
+                    else {
+                        return 5;
+                    }
+                });
             vma_ = vma;
             if (status->vsync) {
-                //std::cout << "CGA: VSYNC asserted at beamX=" << beamX_ << " beamY=" << beamY_ << "\n";
+                // std::cout << "CGA: VSYNC asserted at beamX=" << beamX_ << " beamY=" << beamY_ << "\n";
                 vsync();
+
+                updateCursorBlink();
             }
             if (status->hsync) {
                 hsync();
@@ -475,10 +455,14 @@ private:
     bool lp_latch_{false};
     bool lp_switch_{false};
 
-    // Cursor state
-    bool cursor_blink_{false};
-    bool cursor_status_{false};
-    bool blink_state_{false};
+    // Cursor and blink state
+    bool cursor_blinking_enabled_{false};
+    bool text_blinking_enabled_{false};
+    uint32_t blink_ticks_{0};
+    // Cursor blink state: true == blinking(off), false == visible cursor
+    bool cursor_blink_state_{false};
+    // Text blink state: true = blinking (background), false == visible foreground
+    bool text_blink_state_{false};
 
     // Mode register bits
     uint8_t mode_byte_{0};
@@ -528,15 +512,17 @@ private:
         {{0, 11, 12, 15}}, // Red / Cyan / White High Intensity
     }};
 
+    [[nodiscard]] bool isCursorActive() const { return crtc_.cursor_immediate() && cursor_blink_state_; }
+
     void tick_lchar() {
-        //std::cout << "CGA: tick_lchar at beamX=" << beamX_ << " beamY=" << beamY_ << " rba=" << rba_ << "\n";
+        // std::cout << "CGA: tick_lchar at beamX=" << beamX_ << " beamY=" << beamY_ << " rba=" << rba_ << "\n";
 
         // Only render if within display extents
         if (rba_ < (CGA_MAX_CLOCK - 16)) {
             if (crtc_.den()) {
                 // Draw current character row
                 if (!mode_graphics_) {
-                    //std::cout << "CGA: Drawing text mode char at rba=" << rba_ << "\n";
+                    // std::cout << "CGA: Drawing text mode char at rba=" << rba_ << "\n";
                     draw_text_mode_lchar();
                 }
                 else if (mode_hires_gfx_) {
@@ -566,17 +552,17 @@ private:
     }
 
     void tick_hchar() {
-        //std::cout << "CGA: tick_hchar at beamX=" << beamX_ << " beamY=" << beamY_ << " rba=" << rba_ << "\n";
-        // Only render if within display extents
+        // std::cout << "CGA: tick_hchar at beamX=" << beamX_ << " beamY=" << beamY_ << " rba=" << rba_ << "\n";
+        //  Only render if within display extents
         if (rba_ < (CGA_MAX_CLOCK - 8)) {
             if (crtc_.den()) {
                 // Draw current character row
                 if (!mode_graphics_) {
-                    //std::cout << "CGA: Drawing text mode char at rba=" << rba_ << "\n";
+                    // std::cout << "CGA: Drawing text mode char at rba=" << rba_ << "\n";
                     draw_text_mode_hchar();
                 }
                 else if (mode_hires_gfx_) {
-                    //draw_hires_gfx_mode_char();
+                    // draw_hires_gfx_mode_char();
                 }
                 else {
                     draw_solid_hchar(cc_overscan_color_);
@@ -616,7 +602,9 @@ private:
     }
 
     [[nodiscard]] uint64_t get_hchar_glyph_row(const uint8_t glyph, const uint8_t row) const {
-        if (cursor_blink_ && !cursor_status_) {
+        if (text_blinking_enabled_ && text_blink_state_) {
+            // If text blinking is enabled in CC register, and text is actively blinking (off), return background
+            // color.
             return CGA_COLORS_U64[cur_bg_];
         }
 
@@ -627,7 +615,9 @@ private:
     }
 
     [[nodiscard]] std::pair<uint64_t, uint64_t> get_lchar_glyph_rows(const uint8_t glyph, const uint8_t row) const {
-        if (cursor_blink_ && !cursor_status_) {
+        if (text_blinking_enabled_ && text_blink_state_) {
+            // If text blinking is enabled in CC register, and text is actively blinking (off), return background
+            // color.
             const uint64_t bg = CGA_COLORS_U64[cur_bg_];
             return {bg, bg};
         }
@@ -638,23 +628,16 @@ private:
 
         // Apply foreground/background colors to each half
         const uint64_t row0 =
-            (glyph_row_base_0 & CGA_COLORS_U64[cur_fg_])
-            | (~glyph_row_base_0 & CGA_COLORS_U64[cur_bg_]);
+            (glyph_row_base_0 & CGA_COLORS_U64[cur_fg_]) | (~glyph_row_base_0 & CGA_COLORS_U64[cur_bg_]);
         const uint64_t row1 =
-            (glyph_row_base_1 & CGA_COLORS_U64[cur_fg_])
-            | (~glyph_row_base_1 & CGA_COLORS_U64[cur_bg_]);
+            (glyph_row_base_1 & CGA_COLORS_U64[cur_fg_]) | (~glyph_row_base_1 & CGA_COLORS_U64[cur_bg_]);
 
         return {row0, row1};
-
     }
 
     /// Draw an entire character row in high resolution text mode (8 pixels)
     void draw_text_mode_hchar() {
-        // Do cursor if visible, enabled and defined
-        if (vma_ == crtc_.cursor_address()
-            && cursor_status_
-            && blink_state_
-            && cursor_data_[(crtc_.vlc() & 0x1F)]) {
+        if (isCursorActive()) {
             draw_solid_hchar(cur_fg_);
         }
         else if (mode_enable_) {
@@ -670,12 +653,8 @@ private:
     }
 
     void draw_text_mode_lchar() {
-        // Do cursor if visible, enabled and defined
-        if (vma_ == crtc_.cursor_address()
-            && cursor_status_
-            && blink_state_
-            && cursor_data_[(crtc_.vlc() & 0x1F)]) {
-            draw_solid_hchar(cur_fg_);
+        if (isCursorActive()) {
+            draw_solid_lchar(cur_fg_);
         }
         else if (mode_enable_) {
             // Get the two u64 glyph row components to draw for the current fg and bg colors and character row (vlc)
@@ -686,24 +665,22 @@ private:
         }
         else {
             // When mode bit is disabled in text mode, the CGA acts like VRAM is all 0.
-            draw_solid_hchar(0);
+            draw_solid_lchar(0);
         }
     }
 
 
-    size_t get_gfx_addr(const uint8_t row) const {
+    [[nodiscard]] size_t get_gfx_addr(const uint8_t row) const {
         const auto row_offset = (static_cast<size_t>(row) & 0x01) << 12;
         return (vma_ & 0x0FFF | row_offset) << 1;
     }
 
     void get_lowres_gfx_lchar(uint8_t row, uint64_t& c0, uint64_t& c1, uint64_t& m0, uint64_t& m1) const {
-
-        auto base_addr = get_gfx_addr(row);
+        const auto base_addr = get_gfx_addr(row);
         c0 = CGA_LOWRES_GFX_TABLE[cc_palette_][vram_[base_addr]].first;
         m0 = CGA_LOWRES_GFX_TABLE[cc_palette_][vram_[base_addr]].second;
         c1 = CGA_LOWRES_GFX_TABLE[cc_palette_][vram_[base_addr + 1]].first;
         m1 = CGA_LOWRES_GFX_TABLE[cc_palette_][vram_[base_addr + 1]].second;
-
     }
 
     void draw_lowres_gfx_mode_char() {
@@ -721,6 +698,7 @@ private:
     }
 
     /// Draw a single character column in high resolution graphics mode (640x200)
+    // ReSharper disable once CppMemberFunctionMayBeConst
     void draw_hires_gfx_mode_char() {
         auto base_addr = get_gfx_addr(crtc_.vlc());
         const auto frame_u64 = reinterpret_cast<uint64_t*>(buf_[back_buf_]);
@@ -750,11 +728,11 @@ private:
         // If blinking is disabled, all 16 colors are available as background attributes.
         if (mode_blinking_) {
             cur_bg_ = (cur_attr_ >> 4) & 0x07;
-            cursor_blink_ = (cur_attr_ & 0x80) != 0;
+            text_blinking_enabled_ = (cur_attr_ & 0x80) != 0;
         }
         else {
             cur_bg_ = (cur_attr_ >> 4);
-            cursor_blink_ = false;
+            text_blinking_enabled_ = false;
         }
     }
 
@@ -778,14 +756,10 @@ private:
             scanline_ = 0;
             frame_count_++;
 
-            // Toggle blink state. This is toggled every 8 frames by default.
-            if ((frame_count_ % CGA_DEFAULT_CURSOR_FRAME_CYCLE) == 0) {
-                cursor_blink_ = !cursor_blink_;
-            }
-
             // Swap the display buffers
-            //std::cout << "vsync: swapping buffers\n";
+            // std::cout << "vsync: swapping buffers\n";
             swap();
+            updateCursorBlink();
         }
     }
 

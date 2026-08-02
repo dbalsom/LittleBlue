@@ -46,7 +46,7 @@ target_sources(${EXECUTABLE_NAME}
         src/core/bios.h
         src/core/font.h
         src/core/Dmac.h
-        src/core/pic.h
+        src/core/Pic.h
         src/core/Pit.h
         src/core/Ppi.h
         src/core/Disassembler.h
@@ -76,7 +76,7 @@ target_sources(${EXECUTABLE_NAME}
         src/gui/DisplayDebugWindow.cpp
         src/gui/InstructionHistoryWindow.h
         src/gui/InstructionHistoryWindow.cpp
-        src/third_party/blip_buffer/blip_buffer.cpp
+        src/third_party/blip_buffer/Blip_Buffer.cpp
         src/frontend/TestRunner.cpp
 )
 

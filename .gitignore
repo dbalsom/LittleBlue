@@ -110,5 +110,6 @@
 /cmake-build-debug/CPackSourceConfig.cmake
 
 /roms/GLABIOS_0.4.0_8X.ROM
+/roms/*.png
 /notes/glabios_checkpoints.txt
 

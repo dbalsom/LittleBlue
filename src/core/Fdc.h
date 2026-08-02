@@ -1,14 +1,14 @@
 #pragma once
 
-#include <cstdint>
-#include <array>
-#include <vector>
-#include <deque>
-#include <unordered_map>
 #include <algorithm>
+#include <array>
 #include <cassert>
+#include <cstdint>
+#include <deque>
 #include <format>
 #include <iostream>
+#include <unordered_map>
+#include <vector>
 
 #include "Dmac.h"
 
@@ -70,13 +70,8 @@ struct DiskFormat
 // Common PC image sizes
 static const std::unordered_map<size_t, DiskFormat>& kFormatTable() {
     static const std::unordered_map<size_t, DiskFormat> k = {
-        {163'840, {40, 1, 8}},
-        {184'320, {40, 1, 9}},
-        {327'680, {40, 2, 8}},
-        {368'640, {40, 2, 9}},
-        {737'280, {80, 2, 9}},
-        {1'228'800, {80, 2, 15}},
-        {1'474'560, {80, 2, 18}},
+        {163'840, {40, 1, 8}}, {184'320, {40, 1, 9}},    {327'680, {40, 2, 8}},    {368'640, {40, 2, 9}},
+        {737'280, {80, 2, 9}}, {1'228'800, {80, 2, 15}}, {1'474'560, {80, 2, 18}},
     };
     return k;
 }
@@ -138,17 +133,11 @@ class FDC
 
 public:
     // ------------------------------- Lifecycle ------------------------------
-    FDC() {
-        resetPowerOn();
-    }
+    FDC() { resetPowerOn(); }
 
-    void attachDMAC(DMAC* d) {
-        dmac_ = d;
-    }
+    void attachDMAC(DMAC* d) { dmac_ = d; }
 
-    void attachPIC(PIC* p) {
-        pic_ = p;
-    }
+    void attachPIC(PIC* p) { pic_ = p; }
 
     // Insert/eject a disk image (raw CHS-linear).
     bool loadDisk(DriveIndex drv, const std::vector<uint8_t>& bytes, bool writeProtected = false) {
@@ -162,32 +151,31 @@ public:
         inferGeometry(d);
         d.ready = d.have_disk;
 
-        std::cout << std::format("FDC: Loaded disk into drive {} ({} bytes, {}C/{}H/{}S, {}-protected)\n",
-                                 drv, bytes.size(),
-                                 d.max_cylinders, d.max_heads, d.max_sectors,
+        std::cout << std::format("FDC: Loaded disk into drive {} ({} bytes, {}C/{}H/{}S, {}-protected)\n", drv,
+                                 bytes.size(), d.max_cylinders, d.max_heads, d.max_sectors,
                                  writeProtected ? "write" : "read-write");
         return true;
     }
 
     // ------------------------------- Bus glue -------------------------------
     uint8_t readIO(const uint16_t port) {
-        //std::cout << "FDC: Read from port " << std::hex << port << std::dec << "\n";
+        // std::cout << "FDC: Read from port " << std::hex << port << std::dec << "\n";
         switch (port) {
             case PORT_DOR:
                 // DOR is write-only
                 return 0xFF;
             case PORT_MSR:
-            {
-                auto b = readStatusRegister();
-                //std::cout << std::format("FDC: Read MSR: {:02X}", b) << std::endl;
-                return b;
-            }
+                {
+                    auto b = readStatusRegister();
+                    // std::cout << std::format("FDC: Read MSR: {:02X}", b) << std::endl;
+                    return b;
+                }
             case PORT_DATA:
-            {
-                auto b = readDataRegister();
-                //std::cout << std::format("FDC: Read DATA: {:02X}", b) << std::endl;
-                return b;
-            }
+                {
+                    auto b = readDataRegister();
+                    // std::cout << std::format("FDC: Read DATA: {:02X}", b) << std::endl;
+                    return b;
+                }
             default:
                 break;
         }
@@ -195,7 +183,7 @@ public:
     }
 
     void writeIO(const uint16_t port, const uint8_t val) {
-        //std::cout << std::format("FDC: Write to port: {:0X} value: {:02X}", port, val) << std::endl;
+        // std::cout << std::format("FDC: Write to port: {:0X} value: {:02X}", port, val) << std::endl;
         switch (port) {
             case PORT_DOR:
                 std::cout << std::format("FDC: Write DOR: {:02X}", val) << std::endl;
@@ -226,7 +214,7 @@ public:
         }
 
         const size_t addr = off + dma_byte_index_;
-        //std::cout << "offset: " << addr;
+        // std::cout << "offset: " << addr;
         const uint8_t v = (addr < d.image.size()) ? d.image[addr] : 0xFF;
         advanceByte();
         return v;
@@ -262,18 +250,12 @@ public:
     }
 
     // Has the controller asserted DRQ for DMA ch2?
-    [[nodiscard]] bool isDrqAsserted() const {
-        return drq_;
-    }
+    [[nodiscard]] bool isDrqAsserted() const { return drq_; }
 
     // ------------------------------ Interrupts ------------------------------
-    [[nodiscard]] bool pollIrq() const {
-        return irq_pending_;
-    }
+    [[nodiscard]] bool pollIrq() const { return irq_pending_; }
 
-    void ackIrq() {
-        setIRQ(false);
-    }
+    void ackIrq() { setIRQ(false); }
 
     // ------------------------------- Ticking --------------------------------
     void tick() {
@@ -298,13 +280,9 @@ public:
     }
 
     // ------------------------------ Public reset ----------------------------
-    void resetPowerOn() {
-        resetInternal(true);
-    }
+    void resetPowerOn() { resetInternal(true); }
 
-    void reset() {
-        resetInternal(false);
-    }
+    void reset() { resetInternal(false); }
 
 private:
     struct Op
@@ -453,7 +431,7 @@ private:
         const uint8_t v = fifo_out_.front();
         fifo_out_.pop_front();
         if (fifo_out_.empty()) {
-            //mrq_ = false;
+            // mrq_ = false;
             dio_result_ = false;
             busy_ = false;
             cur_cmd_ = Command::None;
@@ -552,9 +530,8 @@ private:
     }
 
     void setSenseResult(InterruptCode ic, uint8_t drv, uint8_t pcnVal) {
-        st0_ = (static_cast<uint8_t>(ic) << ST0_IC_SHIFT)
-            | ((drives_[drv].head & 1) ? ST0_HEAD_ADDRESS : 0)
-            | (drv & 3);
+        st0_ =
+            (static_cast<uint8_t>(ic) << ST0_IC_SHIFT) | ((drives_[drv].head & 1) ? ST0_HEAD_ADDRESS : 0) | (drv & 3);
 
         pcn_ = pcnVal;
     }
@@ -572,7 +549,8 @@ private:
         busy_ = true;
         mrq_ = false;
         dio_result_ = false;
-        // I'm not sure if this is proper logic, but if there was an unacknowledged IRQ, not much we can do about it now.
+        // I'm not sure if this is proper logic, but if there was an unacknowledged IRQ, not much we can do about it
+        // now.
         setIRQ(false);
         switch (cur_cmd_) {
             case Command::Specify:
@@ -625,8 +603,8 @@ private:
     }
 
     void handleSenseInt() {
-        std::cout << "FDC: Handling Sense Interrupt. Returning ST0=" << std::hex
-            << static_cast<int>(st0_) << " PCN=" << static_cast<int>(pcn_) << std::dec << "\n";
+        std::cout << "FDC: Handling Sense Interrupt. Returning ST0=" << std::hex << static_cast<int>(st0_)
+                  << " PCN=" << static_cast<int>(pcn_) << std::dec << "\n";
 
         setSenseResult(InterruptCode::Polling, sel_, drives_[sel_].cylinder);
         setIRQ(false);
@@ -670,8 +648,8 @@ private:
         auto& d = drives_[sel_];
         d.cylinder = op_.C;
         setSenseResult(InterruptCode::Normal, sel_, d.cylinder);
-        std::cout << "FDC: Seek complete on drive " << static_cast<int>(sel_)
-            << " to cylinder " << static_cast<int>(d.cylinder) << ", raising IRQ\n";
+        std::cout << "FDC: Seek complete on drive " << static_cast<int>(sel_) << " to cylinder "
+                  << static_cast<int>(d.cylinder) << ", raising IRQ\n";
         setIRQ(true);
         op_ = Op{};
         busy_ = false;
@@ -697,14 +675,9 @@ private:
         const uint8_t drv = DH & 3;
         const uint8_t headReq = (DH >> 2) & 1;
 
-        std::cout << std::format(
-            "FDC: Read Data cmd for drive {}, C={}, H={}, S={}, N={}, EOT={}\n",
-            static_cast<int>(drv),
-            static_cast<int>(C),
-            static_cast<int>(H),
-            static_cast<int>(S),
-            static_cast<int>(N),
-            static_cast<int>(EOT));
+        std::cout << std::format("FDC: Read Data cmd for drive {}, C={}, H={}, S={}, N={}, EOT={}\n",
+                                 static_cast<int>(drv), static_cast<int>(C), static_cast<int>(H), static_cast<int>(S),
+                                 static_cast<int>(N), static_cast<int>(EOT));
 
         sel_ = drv;
         const auto& d = drives_[drv];
@@ -734,14 +707,9 @@ private:
         const uint8_t headReq = (DH >> 2) & 1;
         sel_ = drv;
 
-        std::cout << std::format(
-            "FDC: Write Data cmd for drive {}, C={}, H={}, S={}, N={}, EOT={}\n",
-            static_cast<int>(drv),
-            static_cast<int>(C),
-            static_cast<int>(H),
-            static_cast<int>(S),
-            static_cast<int>(N),
-            static_cast<int>(EOT));
+        std::cout << std::format("FDC: Write Data cmd for drive {}, C={}, H={}, S={}, N={}, EOT={}\n",
+                                 static_cast<int>(drv), static_cast<int>(C), static_cast<int>(H), static_cast<int>(S),
+                                 static_cast<int>(N), static_cast<int>(EOT));
 
         const auto& d = drives_[drv];
         if (!d.have_disk || !d.ready || !d.motor_on) {
@@ -796,16 +764,14 @@ private:
         uint8_t C = d.cylinder;
         uint8_t S = d.sector;
         uint8_t N = 2;
-        st0_ = (static_cast<uint8_t>(InterruptCode::Normal) << ST0_IC_SHIFT)
-            | (drv & 3)
-            | ((H & 1) ? ST0_HEAD_ADDRESS : 0);
+        st0_ = (static_cast<uint8_t>(InterruptCode::Normal) << ST0_IC_SHIFT) | (drv & 3) |
+            ((H & 1) ? ST0_HEAD_ADDRESS : 0);
         pushResult({st0_, 0, 0, C, H, S, N});
     }
 
     void endError(uint8_t C, uint8_t H, uint8_t S, uint8_t N, const bool write, const bool write_protect = false) {
-        st0_ = (static_cast<uint8_t>(InterruptCode::Abnormal) << ST0_IC_SHIFT)
-            | (sel_ & 3)
-            | ((H & 1) ? ST0_HEAD_ADDRESS : 0);
+        st0_ = (static_cast<uint8_t>(InterruptCode::Abnormal) << ST0_IC_SHIFT) | (sel_ & 3) |
+            ((H & 1) ? ST0_HEAD_ADDRESS : 0);
 
         if (write_protect) {
             st1_ = ST1_NOT_WRITABLE | ST1_NO_DATA;
@@ -829,8 +795,7 @@ private:
         dma_start_address_ = dmac_->getAddress(2);
         dma_word_count_ = dmac_->getWordCount(2) + 1; // +1 because count is words-1
 
-        std::cout << std::format("FDC: Starting DMA operation: address {:08X}, word count: {}\n",
-                                 dma_start_address_,
+        std::cout << std::format("FDC: Starting DMA operation: address {:08X}, word count: {}\n", dma_start_address_,
                                  dma_word_count_);
 
         bytes_left_ = static_cast<size_t>(bps) * static_cast<size_t>((EOT >= S) ? (EOT - S + 1) : 1);
@@ -848,7 +813,7 @@ private:
 
         if (bytes_left_ == 0) {
             // In DMA mode, only TC signals completion, we ignore EOT
-            //finalizeDataOp();
+            // finalizeDataOp();
         }
         else {
             setDrq(true);
@@ -873,9 +838,8 @@ private:
             // keep R as last sector
         }
         // Queue result bytes: ST0,ST1,ST2,C,H,LastR,N (success)
-        st0_ = (static_cast<uint8_t>(InterruptCode::Normal) << ST0_IC_SHIFT)
-            | (sel_ & 3)
-            | ((H & 1) ? ST0_HEAD_ADDRESS : 0);
+        st0_ = (static_cast<uint8_t>(InterruptCode::Normal) << ST0_IC_SHIFT) | (sel_ & 3) |
+            ((H & 1) ? ST0_HEAD_ADDRESS : 0);
         st1_ = 0;
         st2_ = 0;
         fifo_out_.push_back(st0_);
@@ -887,12 +851,11 @@ private:
         fifo_out_.push_back(N);
         dio_result_ = true;
         mrq_ = true;
-        busy_ = false;
+        busy_ = true;
         op_ = Op{};
         d.sector = std::min<uint8_t>(lastR, d.max_sectors);
         // Signal completion via IRQ6
-        std::cout << std::format("FDC: DMA operation complete. EOP: {} Transferred {} bytes. Raising IRQ\n",
-                                 eop,
+        std::cout << std::format("FDC: DMA operation complete. EOP: {} Transferred {} bytes. Raising IRQ\n", eop,
                                  bytes_transferred_);
 
         if (irq_pending_) {
@@ -904,9 +867,8 @@ private:
     void setDrq(const bool state) {
         drq_ = state;
         if (dmac_) {
-            //std::cout << "FDC: Setting DREQ2 to " << (state ? "ON" : "OFF") << std::endl;
+            // std::cout << "FDC: Setting DREQ2 to " << (state ? "ON" : "OFF") << std::endl;
             dmac_->setDMARequestLine(2, state); /* DREQ2 */
         }
     }
 };
-

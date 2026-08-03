@@ -17,7 +17,8 @@ endif()
 
 if(MSVC)
     if(NOT CMAKE_GENERATOR STREQUAL "Ninja")
-        add_definitions(/MP)				# parallelize each target, unless Ninja is the generator
+        add_compile_options(/MP)				# parallelize each target, unless Ninja is the generator
+        add_compile_options(/std:c++latest)
     endif()
 endif()
 
@@ -45,7 +46,7 @@ target_sources(${EXECUTABLE_NAME}
         src/core/bios.h
         src/core/font.h
         src/core/Dmac.h
-        src/core/pic.h
+        src/core/Pic.h
         src/core/Pit.h
         src/core/Ppi.h
         src/core/Disassembler.h
@@ -75,7 +76,7 @@ target_sources(${EXECUTABLE_NAME}
         src/gui/DisplayDebugWindow.cpp
         src/gui/InstructionHistoryWindow.h
         src/gui/InstructionHistoryWindow.cpp
-        src/third_party/blip_buffer/blip_buffer.cpp
+        src/third_party/blip_buffer/Blip_Buffer.cpp
         src/frontend/TestRunner.cpp
 )
 
@@ -107,7 +108,7 @@ endmacro()
 add_subdirectory_quiet(SDL EXCLUDE_FROM_ALL)
 
 # Add ImGui
-add_library(imgui
+add_library(imgui STATIC
         imgui/imgui.cpp
         imgui/imgui_draw.cpp
         imgui/imgui_tables.cpp
@@ -116,6 +117,8 @@ add_library(imgui
         imgui/backends/imgui_impl_sdl3.cpp
         imgui/backends/imgui_impl_sdlrenderer3.cpp
 )
+
+target_compile_features(imgui PRIVATE cxx_std_20)
 
 target_include_directories(imgui
         PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}

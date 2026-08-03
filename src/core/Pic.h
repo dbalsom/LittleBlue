@@ -17,61 +17,61 @@ public:
     }
 
     void reset() {
-        _interruptPending = false;
-        _interrupt = 0;
-        _irr = 0;
-        _imr = 0;
-        _isr = 0;
-        _icw1 = 0;
-        _icw2 = 0;
-        _icw3 = 0;
-        _icw4 = 0;
-        _ocw3 = 0;
-        _lines = 0;
-        _specialMaskMode = false;
-        _acknowledgedBytes = 0;
-        _priority = 0;
-        _rotateInAutomaticEOIMode = false;
-        _initializationState = initializationStateNone;
+        interrupt_pending_ = false;
+        interrupt_ = 0;
+        irr_ = 0;
+        imr_ = 0;
+        isr_ = 0;
+        icw1_ = 0;
+        icw2_ = 0;
+        icw3_ = 0;
+        icw4_ = 0;
+        ocw3_ = 0;
+        lines_ = 0;
+        special_mask_mode_ = false;
+        acknowledged_bytes_ = 0;
+        priority_ = 0;
+        rotate_in_automatic_eoi_mode_ = false;
+        initialization_state_ = initializationStateNone;
     }
 
     void stubInit() {
-        _icw1 = 0x13;
-        _icw2 = 0x08;
-        _icw4 = 0x0f;
-        _imr = 0xbc;
+        icw1_ = 0x13;
+        icw2_ = 0x08;
+        icw4_ = 0x0f;
+        imr_ = 0xbc;
     }
 
     void write(const uint32_t address, const uint8_t data) {
         if (address == 0) {
             if ((data & 0x10) != 0) {
-                _icw1 = data;
+                icw1_ = data;
                 if (levelTriggered()) {
-                    _irr = _lines;
+                    irr_ = lines_;
                 }
                 else {
-                    _irr = 0;
+                    irr_ = 0;
                 }
-                _initializationState = initializationStateICW2;
-                _imr = 0;
-                _isr = 0;
-                _icw2 = 0;
-                _icw3 = 0;
-                _icw4 = 0;
-                _ocw3 = 0;
-                _acknowledgedBytes = 0;
-                _priority = 0;
-                _rotateInAutomaticEOIMode = false;
-                _specialMaskMode = false;
-                _interrupt = 0;
-                _interruptPending = false;
+                initialization_state_ = initializationStateICW2;
+                imr_ = 0;
+                isr_ = 0;
+                icw2_ = 0;
+                icw3_ = 0;
+                icw4_ = 0;
+                ocw3_ = 0;
+                acknowledged_bytes_ = 0;
+                priority_ = 0;
+                rotate_in_automatic_eoi_mode_ = false;
+                special_mask_mode_ = false;
+                interrupt_ = 0;
+                interrupt_pending_ = false;
             }
             else {
                 if ((data & 8) == 0) {
                     const uint8_t b = 1 << (data & 7);
                     switch (data & 0xe0) {
                         case 0x00: // Rotate in automatic EOI mode (clear) (Automatic Rotation)
-                            _rotateInAutomaticEOIMode = false;
+                            rotate_in_automatic_eoi_mode_ = false;
                             break;
                         case 0x20: // Non-specific EOI command (End of Interrupt)
                             nonSpecificEOI(false);
@@ -79,21 +79,21 @@ public:
                         case 0x40: // No operation
                             break;
                         case 0x60: // Specific EOI command (End of Interrupt)
-                            _isr &= ~b;
+                            isr_ &= ~b;
                             break;
                         case 0x80: // Rotate in automatic EOI mode (set) (Automatic Rotation)
-                            _rotateInAutomaticEOIMode = true;
+                            rotate_in_automatic_eoi_mode_ = true;
                             break;
                         case 0xa0: // Rotate on non-specific EOI command (Automatic Rotation)
                             nonSpecificEOI(true);
                             break;
                         case 0xc0: // Set priority command (Specific Rotation)
-                            _priority = (data + 1) & 7;
+                            priority_ = (data + 1) & 7;
                             break;
                         case 0xe0: // Rotate on specific EOI command (Specific Rotation)
-                            if ((_isr & b) != 0) {
-                                _isr &= ~b;
-                                _priority = (data + 1) & 7;
+                            if ((isr_ & b) != 0) {
+                                isr_ &= ~b;
+                                priority_ = (data + 1) & 7;
                             }
                             break;
                         default:
@@ -101,59 +101,59 @@ public:
                     }
                 }
                 else {
-                    _ocw3 = data;
-                    if ((_ocw3 & 0x40) != 0) {
-                        _specialMaskMode = (_ocw3 & 0x20) != 0;
+                    ocw3_ = data;
+                    if ((ocw3_ & 0x40) != 0) {
+                        special_mask_mode_ = (ocw3_ & 0x20) != 0;
                     }
                 }
             }
         }
         else {
-            switch (_initializationState) {
+            switch (initialization_state_) {
                 case initializationStateICW2:
-                    _icw2 = data;
+                    icw2_ = data;
                     if (cascadeMode()) {
-                        _initializationState = initializationStateICW3;
+                        initialization_state_ = initializationStateICW3;
                     }
                     else {
                         checkICW4Needed();
                     }
                     break;
                 case initializationStateICW3:
-                    _icw3 = data;
+                    icw3_ = data;
                     checkICW4Needed();
                     break;
                 case initializationStateICW4:
-                    _icw4 = data;
-                    _initializationState = initializationStateNone;
+                    icw4_ = data;
+                    initialization_state_ = initializationStateNone;
                     break;
                 case initializationStateNone:
-                    _imr = data;
+                    imr_ = data;
                     break;
             }
         }
     }
 
     uint8_t read(const uint32_t address) {
-        if ((_ocw3 & 4) != 0) {
+        if ((ocw3_ & 4) != 0) {
             // Poll mode
             acknowledge();
-            return (interruptPending() ? 0x80 : 0) + _interrupt;
+            return (interruptPending() ? 0x80 : 0) + interrupt_;
         }
         if (address == 0) {
-            if ((_ocw3 & 1) != 0) {
-                return _isr;
+            if ((ocw3_ & 1) != 0) {
+                return isr_;
             }
-            return _irr;
+            return irr_;
         }
 
-        return _imr;
+        return imr_;
     }
 
     uint8_t interruptAcknowledge() {
-        if (_acknowledgedBytes == 0) {
+        if (acknowledged_bytes_ == 0) {
             acknowledge();
-            _acknowledgedBytes = 1;
+            acknowledged_bytes_ = 1;
             if (i86Mode()) {
                 return 0xFF;
             }
@@ -162,53 +162,54 @@ public:
             }
         }
         if (i86Mode()) {
-            _acknowledgedBytes = 0;
+            acknowledged_bytes_ = 0;
             if (autoEOI()) {
-                nonSpecificEOI(_rotateInAutomaticEOIMode);
+                nonSpecificEOI(rotate_in_automatic_eoi_mode_);
             }
-            _interruptPending = false;
-            if (slaveOn(_interrupt)) {
+            interrupt_pending_ = false;
+            if (slaveOn(interrupt_)) {
                 return 0xFF; // Filled in by slave PIC
             }
-            return _interrupt + (_icw2 & 0xF8);
+            return interrupt_ + (icw2_ & 0xF8);
         }
-        if (_acknowledgedBytes == 1) {
-            _acknowledgedBytes = 2;
-            if (slaveOn(_interrupt)) {
+        if (acknowledged_bytes_ == 1) {
+            acknowledged_bytes_ = 2;
+            if (slaveOn(interrupt_)) {
                 return 0xff; // Filled in by slave PIC
             }
-            if ((_icw1 & 4) != 0) {
+            if ((icw1_ & 4) != 0) {
                 // Call address interval 4
-                return (_interrupt << 2) + (_icw1 & 0xE0);
+                return (interrupt_ << 2) + (icw1_ & 0xE0);
             }
-            return (_interrupt << 3) + (_icw1 & 0xc0);
+            return (interrupt_ << 3) + (icw1_ & 0xc0);
         }
-        _acknowledgedBytes = 0;
+        acknowledged_bytes_ = 0;
         if (autoEOI()) {
-            nonSpecificEOI(_rotateInAutomaticEOIMode);
+            nonSpecificEOI(rotate_in_automatic_eoi_mode_);
         }
-        _interruptPending = false;
-        if (slaveOn(_interrupt)) {
+        interrupt_pending_ = false;
+        if (slaveOn(interrupt_)) {
             return 0xff; // Filled in by slave PIC
         }
-        return _icw2;
+        return icw2_;
     }
 
     void setIRQLine(const int line, const bool state) {
         const uint8_t b = 1 << line;
         if (state) {
-            if (levelTriggered() || (_lines & b) == 0) {
-                _irr |= b;
+            if (levelTriggered() || (lines_ & b) == 0) {
+                irr_ |= b;
             }
-            _lines |= b;
+            lines_ |= b;
         }
         else {
-            _irr &= ~b;
-            _lines &= ~b;
+            irr_ &= ~b;
+            lines_ &= ~b;
         }
     }
 
-    [[nodiscard]] bool interruptPending() {
+    [[nodiscard]]
+    bool interruptPending() {
         auto i = findBestInterrupt();
         if (i != -1) {
             if (i != 0) {
@@ -219,45 +220,51 @@ public:
         return false;
     }
 
-    [[nodiscard]] uint8_t getIRQLines() const { return _lines; }
+    [[nodiscard]] uint8_t getIRQLines() const { return lines_; }
 
     // Return a snapshot of internal PIC state for debugging UI
     [[nodiscard]] PicDebugState getDebugState() const {
         const PicDebugState s{
-            .irr = _irr,
-            .imr = _imr,
-            .isr = _isr,
-            .lines = _lines
+            .irr = irr_,
+            .imr = imr_,
+            .isr = isr_,
+            .lines = lines_
         };
         return s;
     }
 
-private:
-    [[nodiscard]] bool cascadeMode() const { return (_icw1 & 2) == 0; }
-    [[nodiscard]] bool levelTriggered() const { return (_icw1 & 8) != 0; }
-    [[nodiscard]] bool i86Mode() const { return (_icw4 & 1) != 0; }
-    [[nodiscard]] bool autoEOI() const { return (_icw4 & 2) != 0; }
+    // Return whether in cascade mode (connected to master PIC) - should be false on XT
+    [[nodiscard]] bool cascadeMode() const { return (icw1_ & 2) == 0; }
+    // Return whether level-triggered mode is enabled - should be true on XT
+    [[nodiscard]] bool levelTriggered() const { return (icw1_ & 8) != 0; }
+    // Return whether in 8086 mode - should be true on XT
+    [[nodiscard]] bool i86Mode() const { return (icw4_ & 1) != 0; }
+    // Return whether auto EOI mode is enabled
+    [[nodiscard]] bool autoEOI() const { return (icw4_ & 2) != 0; }
 
-    [[nodiscard]] bool slaveOn(const int channel) const {
-        return cascadeMode() && (_icw4 & 0xc0) == 0xc0 && (_icw3 & (1 << channel)) != 0;
+private:
+    [[nodiscard]]
+    bool slaveOn(const int channel) const {
+        return cascadeMode() && (icw4_ & 0xc0) == 0xc0 && (icw3_ & (1 << channel)) != 0;
     }
 
-    [[nodiscard]] int findBestInterrupt() {
-        int n = _priority;
+    [[nodiscard]]
+    int findBestInterrupt() {
+        int n = priority_;
         for (int i = 0; i < 8; ++i) {
             const uint8_t b = 1 << n;
-            const bool s = (_icw4 & 0x10) != 0 && slaveOn(n);
-            if ((_isr & b) != 0 && !_specialMaskMode && !s) {
+            const bool s = (icw4_ & 0x10) != 0 && slaveOn(n);
+            if ((isr_ & b) != 0 && !special_mask_mode_ && !s) {
                 break;
             }
-            if ((_irr & b) != 0 && (_imr & b) == 0 && ((_isr & b) == 0 || s)) {
+            if ((irr_ & b) != 0 && (imr_ & b) == 0 && ((isr_ & b) == 0 || s)) {
                 return n;
             }
-            if ((_isr & b) != 0 && !_specialMaskMode && s) {
+            if ((isr_ & b) != 0 && !special_mask_mode_ && s) {
                 break;
             }
             n = (n + 1) & 7;
-            _interrupt = n;
+            interrupt_ = n;
         }
         return -1;
     }
@@ -265,25 +272,25 @@ private:
     void acknowledge() {
         const int i = findBestInterrupt();
         if (i == -1) {
-            _interrupt = 7;
+            interrupt_ = 7;
             return;
         }
         const uint8_t b = 1 << i;
-        _isr |= b;
+        isr_ |= b;
         if (!levelTriggered()) {
-            _irr &= ~b;
+            irr_ &= ~b;
         }
     }
 
     void nonSpecificEOI(bool rotatePriority = false) {
-        int n = _priority;
+        int n = priority_;
         for (int i = 0; i < 8; ++i) {
             const uint8_t b = 1 << n;
             n = (n + 1) & 7;
-            if ((_isr & b) != 0) {
-                _isr &= ~b;
+            if ((isr_ & b) != 0) {
+                isr_ &= ~b;
                 if (rotatePriority) {
-                    _priority = n & 7;
+                    priority_ = n & 7;
                 }
                 break;
             }
@@ -291,11 +298,11 @@ private:
     }
 
     void checkICW4Needed() {
-        if ((_icw1 & 1) != 0) {
-            _initializationState = initializationStateICW4;
+        if ((icw1_ & 1) != 0) {
+            initialization_state_ = initializationStateICW4;
         }
         else {
-            _initializationState = initializationStateNone;
+            initialization_state_ = initializationStateNone;
         }
     }
 
@@ -307,22 +314,22 @@ private:
         initializationStateICW4
     };
 
-    bool _interruptPending;
-    int _interrupt;
-    uint8_t _irr;
-    uint8_t _imr;
-    uint8_t _isr;
-    uint8_t _icw1;
-    uint8_t _icw2;
-    uint8_t _icw3;
-    uint8_t _icw4;
-    uint8_t _ocw3;
-    uint8_t _lines;
-    int _acknowledgedBytes;
-    int _priority;
-    bool _specialMaskMode;
-    bool _rotateInAutomaticEOIMode;
-    InitializationState _initializationState;
+    bool interrupt_pending_;
+    int interrupt_;
+    uint8_t irr_;
+    uint8_t imr_;
+    uint8_t isr_;
+    uint8_t icw1_;
+    uint8_t icw2_;
+    uint8_t icw3_;
+    uint8_t icw4_;
+    uint8_t ocw3_;
+    uint8_t lines_;
+    int acknowledged_bytes_;
+    int priority_;
+    bool special_mask_mode_;
+    bool rotate_in_automatic_eoi_mode_;
+    InitializationState initialization_state_;
 };
 
 #endif //PIC_H
